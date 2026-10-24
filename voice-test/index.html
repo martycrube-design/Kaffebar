@@ -27,12 +27,22 @@ select,input[type=text]{width:100%;font:inherit;padding:10px 12px;border-radius:
 #load:disabled{opacity:.5}
 progress{width:100%;height:10px;margin-top:10px}
 #status{font-size:14px;color:var(--muted);margin-top:8px;min-height:1.4em}
-#talk{display:block;width:100%;height:150px;border-radius:24px;border:0;font:inherit;font-size:24px;font-weight:700;background:var(--accent);color:var(--accent-fg);
-  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none}
-#talk:disabled{opacity:.4}
-#talk.rec{background:var(--rec);color:#fff}
-#level{height:8px;border-radius:4px;background:var(--line);margin-top:10px;overflow:hidden}
-#level>i{display:block;height:100%;width:0;background:var(--rec)}
+#talk{--lvl:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;width:100%;height:170px;border-radius:24px;border:0;font:inherit;
+  background:var(--accent);color:var(--accent-fg);transition:background-color .15s,transform .1s;
+  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none;-webkit-tap-highlight-color:transparent}
+#talk *{pointer-events:none}
+#talk .big{font-size:26px;font-weight:700}
+#talk .hint{font-size:15px;opacity:.85}
+#talk .icon{font-size:30px;line-height:1}
+#talk[data-state=off]{opacity:.45}
+#talk[data-state=listening]{background:var(--rec);color:#fff;transform:scale(.98);box-shadow:0 0 0 calc(4px + var(--lvl) * 22px) color-mix(in srgb,var(--rec) 35%,transparent)}
+#talk[data-state=thinking]{background:var(--muted);color:var(--bg)}
+#talk[data-state=ok]{background:var(--ok);color:#fff}
+#talk[data-state=bad],#talk[data-state=short]{background:var(--bad);color:#fff}
+#talk[data-state=thinking] .icon{animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#mic{font:inherit;font-weight:600;padding:12px;border-radius:12px;border:2px solid var(--accent);background:transparent;color:var(--fg);width:100%;margin-bottom:12px}
+#micstate{font-size:14px;color:var(--muted);margin:-4px 0 12px}
 #result{font-size:22px;margin:4px 0}
 .ok{color:var(--ok);font-weight:700}.bad{color:var(--bad);font-weight:700}
 .muted{color:var(--muted);font-size:14px}
@@ -71,8 +81,9 @@ th{color:var(--muted);font-weight:500}
   </section>
 
   <section class="card">
-    <button id="talk" disabled>Load a model first</button>
-    <div id="level"><i></i></div>
+    <button id="mic">🎤 Turn on microphone</button>
+    <div id="micstate">Microphone is off.</div>
+    <button id="talk" data-state="off"><span class="icon">🎙️</span><span class="big">Load a model first</span><span class="hint"></span></button>
     <div id="result" style="margin-top:12px"></div>
     <div id="detail" class="muted"></div>
   </section>
@@ -117,9 +128,11 @@ function attempts() {
 
 $("load").onclick = async () => {
   if (loading) return;
+  enableMic();
   loading = true;
-  $("load").disabled = $("talk").disabled = true;
+  $("load").disabled = true;
   asr = null;
+  setTalk("off", "Loading model…", "");
   const id = $("model").value;
   const files = new Map();
   $("prog").hidden = false;
@@ -127,7 +140,7 @@ $("load").onclick = async () => {
     try {
       $("status").textContent = `Loading on the ${a.name}…`;
       const t0 = performance.now();
-      asr = await pipeline("automatic-speech-recognition", id, {
+      const model = await pipeline("automatic-speech-recognition", id, {
         device: a.device, dtype: a.dtype,
         progress_callback: (p) => {
           if (p.status === "progress" && p.total) {
@@ -141,7 +154,8 @@ $("load").onclick = async () => {
       });
       // Warm up so the first real try isn't slow.
       $("status").textContent = "Warming up…";
-      await asr(new Float32Array(16000), { language: "norwegian", task: "transcribe" });
+      await model(new Float32Array(16000), { language: "norwegian", task: "transcribe" });
+      asr = model;
       const secs = ((performance.now() - t0) / 1000).toFixed(1);
       $("status").textContent = `Ready on the ${a.name} (${secs} s to load). Hold the button and say the word.`;
       break;
@@ -153,33 +167,77 @@ $("load").onclick = async () => {
   }
   $("prog").hidden = true;
   $("load").disabled = false;
-  $("talk").disabled = !asr;
-  $("talk").textContent = asr ? "Hold to talk" : "Load a model first";
   loading = false;
+  idle();
 };
-$("model").onchange = () => { asr = null; $("talk").disabled = true; $("talk").textContent = "Load a model first"; $("status").textContent = "Not loaded yet."; };
+$("model").onchange = () => { asr = null; $("status").textContent = "Not loaded yet."; idle(); };
+
+// --- talk button states ----------------------------------------------------------
+const talkBtn = $("talk");
+function setTalk(state, big, hint, icon) {
+  talkBtn.dataset.state = state;
+  talkBtn.querySelector(".big").textContent = big;
+  talkBtn.querySelector(".hint").textContent = hint;
+  talkBtn.querySelector(".icon").textContent = icon || { listening: "🔴", thinking: "⏳", ok: "✅", bad: "❌", short: "✋" }[state] || "🎙️";
+}
+function idle() {
+  if (recording || busy) return;
+  if (!asr) setTalk("off", "Load a model first", "");
+  else if (!stream) setTalk("off", "Turn on the microphone", "Tap the button above");
+  else setTalk("idle", "Hold to talk", "Press and keep holding while you say the word");
+}
 
 // --- microphone -----------------------------------------------------------------
-// The stream stays open after the first press so Safari only asks once.
-let ctx, stream, node, chunks = [], recording = false, held = false, startedAt = 0;
+// Asked for on a plain tap (Turn on microphone, or Load model) so Safari shows its prompt.
+// The stream then stays open, and a short pre-roll keeps the first sound of a word.
+let ctx, stream, chunks = [], preroll = [], recording = false, held = false, busy = false, startedAt = 0, micAsk = null;
 
-async function ensureMic() {
+function enableMic() {
   if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
-  if (ctx.state !== "running") await ctx.resume();
-  if (!stream) {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-    const src = ctx.createMediaStreamSource(stream);
-    node = ctx.createScriptProcessor(4096, 1, 1);
-    node.onaudioprocess = (e) => {
-      const d = e.inputBuffer.getChannelData(0);
-      let m = 0;
-      for (let i = 0; i < d.length; i++) m = Math.max(m, Math.abs(d[i]));
-      $("level").firstElementChild.style.width = recording ? Math.min(100, m * 140) + "%" : "0";
-      if (recording) chunks.push(new Float32Array(d));
-    };
-    src.connect(node);
-    node.connect(ctx.destination);
-  }
+  ctx.resume();
+  if (stream || micAsk) return micAsk;
+  $("micstate").textContent = "Waiting for you to allow the microphone…";
+  micAsk = navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+    .then((s) => {
+      stream = s;
+      const node = ctx.createScriptProcessor(4096, 1, 1);
+      node.onaudioprocess = (e) => {
+        const d = new Float32Array(e.inputBuffer.getChannelData(0));
+        if (recording) {
+          chunks.push(d);
+          let m = 0;
+          for (let i = 0; i < d.length; i++) m = Math.max(m, Math.abs(d[i]));
+          talkBtn.style.setProperty("--lvl", Math.min(1, m * 3).toFixed(2));
+        } else {
+          preroll.push(d);
+          if (preroll.length > 4) preroll.shift();
+        }
+      };
+      ctx.createMediaStreamSource(s).connect(node);
+      node.connect(ctx.destination);
+      $("mic").hidden = true;
+      $("micstate").textContent = "Microphone is on.";
+      idle();
+    })
+    .catch((err) => {
+      $("micstate").innerHTML = err.name === "NotAllowedError"
+        ? `<span class="bad">Microphone blocked.</span> Tap <b>aA</b> in Safari's address bar → Website Settings → Microphone → Allow, then reload this page.`
+        : `<span class="bad">No microphone:</span> ${esc(err.message || err.name)}`;
+    })
+    .finally(() => { micAsk = null; });
+  return micAsk;
+}
+$("mic").onclick = () => enableMic();
+
+function beep(freq) {
+  if (!ctx) return;
+  const o = ctx.createOscillator(), g = ctx.createGain(), t0 = ctx.currentTime;
+  o.frequency.value = freq;
+  g.gain.setValueAtTime(0.12, t0);
+  g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.08);
+  o.connect(g).connect(ctx.destination);
+  o.start(t0);
+  o.stop(t0 + 0.09);
 }
 
 // Whisper wants 16 kHz mono.
@@ -195,42 +253,42 @@ async function to16k(samples, rate) {
   return (await off.startRendering()).getChannelData(0);
 }
 
-async function start(e) {
-  e.preventDefault();
-  if (!asr || recording) return;
+function start() {
+  if (!asr || !stream || recording || busy) return;
   held = true;
-  talkBtn.setPointerCapture?.(e.pointerId);
-  try { await ensureMic(); } catch (err) {
-    $("result").innerHTML = `<span class="bad">No microphone:</span> ${esc(err.message || err.name)}`;
-    return;
-  }
-  // The first press may have been spent on Safari's permission prompt.
-  if (!held) return;
-  chunks = [];
+  ctx.resume();
+  chunks = preroll.slice();
   recording = true;
   startedAt = performance.now();
-  $("talk").classList.add("rec");
-  $("talk").textContent = "Listening… let go when done";
+  beep(880);
+  setTalk("listening", "Speak now", "Let go when you're done");
   $("result").textContent = "";
   $("detail").textContent = "";
 }
 
-async function stop(e) {
-  e.preventDefault();
+async function stop() {
+  if (!held) return;
   held = false;
   if (!recording) return;
-  // Keep a short tail so the last sound isn't cut off.
-  await new Promise((r) => setTimeout(r, 200));
-  recording = false;
+  busy = true;
   const talk = (performance.now() - startedAt) / 1000;
-  $("talk").classList.remove("rec");
-  $("talk").textContent = "Thinking…";
-  $("talk").disabled = true;
+  setTalk("thinking", "Thinking…", "Don't talk yet");
+  // Keep a short tail so the last sound isn't cut off.
+  await new Promise((r) => setTimeout(r, 250));
+  recording = false;
+  talkBtn.style.setProperty("--lvl", 0);
+  beep(620);
+  if (talk < 0.35) {
+    setTalk("short", "Too quick", "Keep holding the button while you talk");
+    setTimeout(() => { busy = false; idle(); }, 1500);
+    return;
+  }
   const len = chunks.reduce((n, c) => n + c.length, 0);
   const all = new Float32Array(len);
   let o = 0;
   for (const c of chunks) { all.set(c, o); o += c.length; }
   const target = $("target").value.trim();
+  let ok = false;
   try {
     const audio = await to16k(all, ctx.sampleRate);
     const t0 = performance.now();
@@ -238,7 +296,8 @@ async function stop(e) {
     const think = (performance.now() - t0) / 1000;
     const heard = (out.text || "").trim();
     const score = matchScore(heard, target);
-    const ok = score >= 0.75;
+    ok = score >= 0.75;
+    setTalk(ok ? "ok" : "bad", ok ? "Riktig!" : "Not a match", `Heard “${heard || "…"}”`);
     $("result").innerHTML = `${ok ? '<span class="ok">✓ Riktig</span>' : '<span class="bad">✗ Not a match</span>'} &nbsp;“${esc(heard) || "…"}”`;
     $("detail").textContent = `Match ${(score * 100).toFixed(0)}% · you talked ${talk.toFixed(1)} s · recognised in ${think.toFixed(2)} s`;
     const tr = document.createElement("tr");
@@ -246,16 +305,23 @@ async function stop(e) {
     $("log").prepend(tr);
   } catch (err) {
     console.error(err);
+    setTalk("bad", "Something went wrong", "See the message below");
     $("result").innerHTML = `<span class="bad">Error:</span> ${esc(err.message || String(err))}`;
   }
-  $("talk").disabled = false;
-  $("talk").textContent = "Hold to talk";
+  setTimeout(() => { busy = false; idle(); }, 1500);
 }
 
-const talkBtn = $("talk");
-talkBtn.addEventListener("pointerdown", start);
-for (const ev of ["pointerup", "pointercancel", "pointerleave"]) talkBtn.addEventListener(ev, stop);
+// Touch events with preventDefault stop iOS from selecting text, zooming or
+// cancelling the press; the mouse handlers cover desktop testing.
+const opt = { passive: false };
+talkBtn.addEventListener("touchstart", (e) => { e.preventDefault(); start(); }, opt);
+talkBtn.addEventListener("touchend", (e) => { e.preventDefault(); stop(); }, opt);
+talkBtn.addEventListener("touchcancel", (e) => { e.preventDefault(); stop(); }, opt);
+talkBtn.addEventListener("touchmove", (e) => e.preventDefault(), opt);
+talkBtn.addEventListener("mousedown", (e) => { e.preventDefault(); start(); });
+window.addEventListener("mouseup", () => stop());
 talkBtn.addEventListener("contextmenu", (e) => e.preventDefault());
+talkBtn.addEventListener("selectstart", (e) => e.preventDefault());
 
 // --- matching -------------------------------------------------------------------
 // Close enough counts: compare the target with every same-length run of heard words.
