@@ -1850,6 +1850,8 @@ function teamsChanged(gone, joined) {
   }
   if (S.mode === "buzz" && B.phase === "open" && B.out.size >= n) B.phase = "reveal";
   if (S.mode === "quiz" && paused && paused.m === "quiz" && Object.keys(Q.picks).length >= n) paused.left = Math.min(paused.left, 400);
+  // a team that joins starts from 0 in every game, not with points from an old session
+  if (joined != null) { for (const m in S.pts) S.pts[m][joined] = 0; save(); }
   if (S.mode === "board" && F.phase !== "resume" && joined != null) boardJoin([joined]);
   if (gone != null && Q.duel && Q.duel.includes(gone)) { Q.duel = null; F.duel = null; stopTimers(); setMood(null); S.mode = "board"; return nextTurn(); }
   if (gone != null && S.mode === "board" && F.duel && F.duel.includes(gone)) { if (RACE) { RACE.el.remove(); RACE = null; } if (SLING) { SLING.el.remove(); SLING = null; } F.duel = null; stopTimers(); setMood(null); return nextTurn(); }
@@ -1946,6 +1948,7 @@ function start(mode) {
   stopTimers(); paused = null;
   if (mode !== "buzz") voiceClose();
   if (!WORDS.length) return needList();
+  if (POINTED.includes(mode)) S.pts[mode] = [0, 0, 0, 0], save();
   if (mode === "buzz") startBuzz();
   if (mode === "quiz") startQuiz();
   if (mode === "board") startBoard();
@@ -2258,6 +2261,7 @@ const B = { deck: [], idx: -1, phase: "open", buzzed: null, out: new Set(), show
 function startBuzz() { S.mode = "buzz"; voiceArm(); B.deck = shuffle(WORDS); B.idx = -1; nextBuzz(); }
 function nextBuzz() {
   voiceAbort();
+  if (Math.max(...ON().map(t => pts()[t])) >= WIN_PTS) return gameOver();
   B.idx = (B.idx + 1) % B.deck.length;
   if (B.idx === 0 && B.deck.length) B.deck = shuffle(WORDS);
   B.showNo = S.dir === "no" || (S.dir === "mix" && Math.random() < .5);
@@ -2295,7 +2299,7 @@ function passBuzz() {
 const sayLeft = () => Math.max(0, Math.ceil((B.sayEnd - Date.now()) / 1000));
 function renderBuzz(enter) {
   if (B.phase === "ready") {
-    const half = `<span class="lbl">Klare? · get ready</span><span class="main t-xl">${B.count}</span>`;
+    const half = `<span class="lbl">Klare? · first to ${WIN_PTS} wins</span><span class="main t-xl">${B.count}</span>`;
     show(card(half, enter));
     return renderPads();
   }
@@ -2316,9 +2320,26 @@ function renderBuzz(enter) {
   if (B.phase === "buzzed") host = `<button class="btn primary" data-act="check">Show answer</button><button class="btn" data-act="pass">Pass to others</button>`;
   if (B.phase === "buzzed" && VO.stage) host = "";
   if (B.phase === "check") host = `<span class="status">Did they say it?</span><button class="btn ok" data-act="right">Riktig! +2</button><button class="btn warm" data-act="close">Nesten! +1</button><button class="btn" data-act="nope">Neste gang</button>`;
-  if (B.phase === "reveal") host = `<button class="btn primary" data-act="next">Neste kort →</button>`;
+  if (B.phase === "reveal") host = Math.max(...ON().map(t => pts()[t])) >= WIN_PTS ? `<button class="btn primary" data-act="next">Se vinneren →</button>` : `<button class="btn primary" data-act="next">Neste kort →</button>`;
   show(card(half, enter), host, B.phase === "buzzed" || B.phase === "check" ? B.buzzed : null, B.phase === "buzzed" && !!VO.stage);
   renderPads();
+}
+
+// ---------- the end of a game: a podium for the scored games ----------
+const WIN_PTS = 10, ACT_ROUNDS = 2;
+function gameOver() {
+  stopTimers(); voiceAbort();
+  const sc = pts(), on = ON().sort((a, b) => sc[b] - sc[a]), top = sc[on[0]], winners = on.filter(t => sc[t] === top);
+  const max = Math.max(1, top), tie = winners.length > 1;
+  const title = tie ? "Uavgjort!" : `${TEAMS[winners[0]].name} vant!`;
+  if (S.mode === "buzz") B.phase = "over"; if (S.mode === "charades") V.phase = "over"; if (S.mode === "memory") M.busy = true;
+  // printed for both sides of the table, like the word cards
+  const half = `<span class="lbl">Ferdig! · game over</span><span class="main t-l">${title}</span>
+    <div class="podium">${on.map(t => `<div style="--c:${TEAMS[t].color};height:${30 + 60 * sc[t] / max}px"><b>${sc[t]}</b>${TEAMS[t].name}</div>`).join("")}</div>`;
+  show(card(half, true),
+    `<button class="btn primary" data-act="again">Spill igjen</button><button class="btn soft" data-act="menu">← Spill</button>`);
+  renderPads();
+  sfx.yay(); if (!tie) celebrate(winners[0], null, "VINNER!", "", 2200);
 }
 
 // ---------- Huskespill (memory) ----------
@@ -2362,6 +2383,7 @@ function flipTile(i) {
       const no = a.lang === "no" ? a.text : b.text, en = a.lang === "no" ? b.text : a.text;
       celebrate(M.turn, 1, "MATCH!", `${no} = ${en} · say it!`, 1800);
       renderMemory();
+      if (M.tiles.every(t => t.state === "done")) setTimeout(() => S.mode === "memory" && gameOver(), 2000);
     }, 550);
   } else {
     setTimeout(() => {
@@ -2373,7 +2395,7 @@ function flipTile(i) {
 
 // ---------- Vis det! (charades) ----------
 const V = { turn: 0, deck: [], word: null, phase: "ready", endAt: 0, got: 0, last: 0 };
-function startCharades() { S.mode = "charades"; V.turn = firstOn(); V.deck = shuffle(WORDS); V.phase = "ready"; renderCharades(); }
+function startCharades() { S.mode = "charades"; V.turns = 0; V.turn = firstOn(); V.deck = shuffle(WORDS); V.phase = "ready"; renderCharades(); }
 function nextActWord() { if (!V.deck.length) V.deck = shuffle(WORDS); V.word = V.deck.pop(); }
 function goCharades() { V.phase = "live"; V.got = 0; V.endAt = Date.now() + 60000; V.last = 61; nextActWord(); renderCharades(true); tickCharades(); }
 function tickCharades() {
@@ -2390,7 +2412,7 @@ function tickCharades() {
 function renderCharades(enter) {
   let half, host;
   if (V.phase === "ready") {
-    half = `<span class="lbl">${teamSpan(V.turn)} · vis det!</span>
+    half = `<span class="lbl">${teamSpan(V.turn)} · vis det! · runde ${Math.floor((V.turns || 0) / ON().length) + 1} av ${ACT_ROUNDS}</span>
       <span class="main t-l">One player acts. No talking!</span>
       <span class="ans">The team shouts the word in Norwegian.</span>
       <span class="hints">The actor presses and holds the card to peek at the word.</span>`;
@@ -2406,7 +2428,7 @@ function renderCharades(enter) {
     half = `<span class="lbl">${teamSpan(V.turn)} · tiden er ute!</span>
       <span class="main t-xl">${V.got} ord!</span>
       <span class="ans">${V.got ? "Bra jobba!" : "Neste gang!"}</span>`;
-    host = `<button class="btn primary" data-act="act-next">Next team →</button>`;
+    host = `<button class="btn primary" data-act="act-next">${V.turns + 1 >= ON().length * ACT_ROUNDS ? "Se vinneren →" : "Next team →"}</button>`;
   }
   const clock = V.phase === "live" ? `<div class="clock${V.last <= 10 ? " low" : ""}" id="clock">${V.last > 60 ? 60 : V.last}</div>` : "";
   show(clock + card(half, enter).replace('class="card', `class="card${V.phase === "live" ? " peekable" : ""}`), host, V.turn);
@@ -2801,7 +2823,9 @@ function startBoard(fresh) {
   const sv = fresh ? null : load(BKEY, null);
   if (sv && Array.isArray(sv.pos) && sv.pos.some(p => p > 0)) {
     Object.assign(F, { pos: sv.pos, turn: S.on[sv.turn] ? sv.turn : nextOn(sv.turn), inv: sv.inv, frozen: sv.frozen, seen: sv.seen || [true, true, true, true], wheelR: sv.wheelR || 0, phase: "resume" });
-    return renderBoard(true);
+    // the saved game just carries on; "Start på nytt" is always there to begin again
+    ON().forEach(i => { if (!F.seen[i]) resetSlot(i); });
+    return turnSweep(S.on[F.turn] ? F.turn : nextOn(F.turn));
   }
   F.pos = [0, 0, 0, 0]; F.turn = firstOn(); F.seen = S.on.slice();
   F.inv = [0, 1, 2, 3].map(emptyInv); F.frozen = [false, false, false, false];
@@ -3910,6 +3934,7 @@ function renderBoard(enter) {
   // a peek at the board under whatever is showing
   if (F.phase !== F.lastPhase) { F.peek = false; F.lastPhase = F.phase; }
   if (layer && actions && !["rolling", "landed", "spinning", "chestopen"].includes(F.phase)) actions += `<button class="btn soft peek" data-act="peek">${F.peek ? "Tilbake" : "Se brettet"}</button>`;
+  if (actions && F.phase !== "done") actions += `<button class="btn soft${F.restartArmed ? " warm" : ""}" data-act="board-restart">${F.restartArmed ? "Sikker? Trykk igjen" : "↺ Start på nytt"}</button>`;
   show(`<div class="track journey${F.peek ? " peek" : ""}">${squares}${layer}</div>`, actions, owner);
   boardGlide();
   saveBoard();
@@ -3938,6 +3963,7 @@ center.addEventListener("click", e => {
     case "quiz-reveal": return revealQuiz();
     case "quiz-next": return nextQuestion();
     case "quiz-again": return startQuiz();
+    case "again": return start(S.mode);
     case "board-show": F.shown = true; sfx.reveal(); return renderBoard();
     case "board-right": {
       const w = F.q[2] ? F.q[0] : F.q[1];
@@ -3949,6 +3975,10 @@ center.addEventListener("click", e => {
     case "roll": return rollDie();
     case "use-dbl": if (F.phase === "roll") { F.use.dbl = !F.use.dbl; sfx.pick(); renderBoard(); } return;
     case "use-rocket": if (F.phase === "roll") { F.use.rocket = !F.use.rocket; sfx.pick(); renderBoard(); } return;
+    case "board-restart":
+      if (!F.restartArmed) { F.restartArmed = true; sfx.pick(); renderBoard(); clearTimeout(F.restartT); F.restartT = setTimeout(() => { F.restartArmed = false; if (S.mode === "board") renderBoard(); }, 3000); return; }
+      F.restartArmed = false; clearTimeout(F.restartT);
+    // falls through
     case "board-again": case "board-new": document.querySelectorAll(".slot-ask").forEach(x => x.remove()); return startBoard(true);
     case "board-resume": if (F.phase !== "resume") return; sfx.yay(); ON().forEach(i => { if (!F.seen[i]) resetSlot(i); }); return turnSweep(S.on[F.turn] ? F.turn : nextOn(F.turn));
     case "peek": F.peek = !F.peek; sfx.flip(); return renderBoard();
@@ -3975,7 +4005,7 @@ center.addEventListener("click", e => {
       return celebrate(V.turn, 1, "RIKTIG!", w, 1100);
     }
     case "act-skip": sfx.flip(); nextActWord(); return renderCharades(true);
-    case "act-next": V.turn = nextOn(V.turn); V.phase = "ready"; return renderCharades(true);
+    case "act-next": if (++V.turns >= ON().length * ACT_ROUNDS) return gameOver(); V.turn = nextOn(V.turn); V.phase = "ready"; return renderCharades(true);
     case "bomb-go": if (X.phase === "boom" && bombAlive().length < 2) return; if (X.intro) return; X.holder = X.phase === "boom" ? nextAlive(X.loser) : X.holder; return bombAlive().length === 2 && X.out.length ? lastRound(lightFuse) : lightFuse();
     case "bomb-new": return startBomb();
   }
@@ -4275,8 +4305,12 @@ addEventListener("hashchange", checkLink);
 setTimeout(checkLink, 1900);
 
 // ---------- what's new: pops up once after a new release (bump APP_VERSION and add a note each release) ----------
-const APP_VERSION = 47;
+const APP_VERSION = 48;
 const NEWS = [
+  { v: 48, title: "Vinneren", items: [
+    ["🏆", "Every game has an end now. Først! is first to 10 points, Vis det! is two turns each, and Huskespill ends when the board is cleared. A podium shows who won."],
+    ["0️⃣", "Scores start at 0 each time you start a game."],
+    ["↺", "Fjordreisen carries on where you left off. <b>Start på nytt</b> begins a new game, and you tap it twice to make sure."]] },
   { v: 47, title: "Én sjanse", items: [
     ["👆", "Tap your bar first. Then a <b>blinking mic</b> shows on your bar, and you have 5 seconds to tap it."],
     ["🎙️", "After you tap the mic you have <b>3 seconds</b> to say it. The timers are on your own bar."],
