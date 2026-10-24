@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="no">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Kaffebar Voice Test</title>
+<style>
+:root{--bg:#f6f1ea;--fg:#2b1d14;--muted:#7a6656;--card:#fffaf4;--line:#e5d8c9;--accent:#8a4b2a;--accent-fg:#fff;--ok:#1d7a3a;--bad:#b3261e;--rec:#d23b2f}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1b1410;--fg:#f3e9df;--muted:#b49f8d;--card:#271d17;--line:#3d2f26;--accent:#d08a5c;--accent-fg:#1b1410;--ok:#5fd27a;--bad:#ff7b72;--rec:#ff6a5c}}
+:root[data-theme="dark"]{--bg:#1b1410;--fg:#f3e9df;--muted:#b49f8d;--card:#271d17;--line:#3d2f26;--accent:#d08a5c;--accent-fg:#1b1410;--ok:#5fd27a;--bad:#ff7b72;--rec:#ff6a5c}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.45 -apple-system,system-ui,sans-serif}
+main{max-width:720px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:26px;margin:0 0 4px}
+p.sub{margin:0 0 18px;color:var(--muted)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 16px;margin:0 0 14px}
+label{display:block;font-size:14px;color:var(--muted);margin:0 0 6px}
+select,input[type=text]{width:100%;font:inherit;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+.seg{display:flex;gap:6px}
+.seg button{flex:1;font:inherit;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+.seg button[aria-pressed=true]{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chips button{font:inherit;font-size:15px;padding:6px 12px;border-radius:999px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+.row{display:flex;gap:10px;align-items:center}
+.row>*{flex:1}
+#load{font:inherit;font-weight:600;padding:12px;border-radius:12px;border:0;background:var(--accent);color:var(--accent-fg);width:100%}
+#load:disabled{opacity:.5}
+progress{width:100%;height:10px;margin-top:10px}
+#status{font-size:14px;color:var(--muted);margin-top:8px;min-height:1.4em}
+#talk{display:block;width:100%;height:150px;border-radius:24px;border:0;font:inherit;font-size:24px;font-weight:700;background:var(--accent);color:var(--accent-fg);
+  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none}
+#talk:disabled{opacity:.4}
+#talk.rec{background:var(--rec);color:#fff}
+#level{height:8px;border-radius:4px;background:var(--line);margin-top:10px;overflow:hidden}
+#level>i{display:block;height:100%;width:0;background:var(--rec)}
+#result{font-size:22px;margin:4px 0}
+.ok{color:var(--ok);font-weight:700}.bad{color:var(--bad);font-weight:700}
+.muted{color:var(--muted);font-size:14px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:6px 4px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:500}
+</style>
+</head>
+<body>
+<main>
+  <h1>Kaffebar voice test</h1>
+  <p class="sub">Speech recognition that runs on this iPad. After the one-time download, nothing goes to a server.</p>
+
+  <section class="card">
+    <label for="model">Model</label>
+    <select id="model">
+      <option value="Xenova/nb-whisper-tiny-beta">Norwegian Whisper tiny (~40 MB, fastest)</option>
+      <option value="onnx-community/whisper-base" selected>Whisper base (~80 MB, Norwegian + English)</option>
+      <option value="onnx-community/whisper-small">Whisper small (~250 MB, most accurate, slow)</option>
+    </select>
+    <button id="load" style="margin-top:10px">Load model</button>
+    <progress id="prog" max="100" value="0" hidden></progress>
+    <div id="status">Not loaded yet.</div>
+  </section>
+
+  <section class="card">
+    <label>Language to expect</label>
+    <div class="seg" id="lang">
+      <button data-lang="norwegian" aria-pressed="true">Norsk</button>
+      <button data-lang="english" aria-pressed="false">English</button>
+      <button data-lang="" aria-pressed="false">Auto</button>
+    </div>
+    <label for="target" style="margin-top:12px">Target word</label>
+    <input id="target" type="text" value="kaffe" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <div class="chips" id="chips"></div>
+  </section>
+
+  <section class="card">
+    <button id="talk" disabled>Load a model first</button>
+    <div id="level"><i></i></div>
+    <div id="result" style="margin-top:12px"></div>
+    <div id="detail" class="muted"></div>
+  </section>
+
+  <section class="card">
+    <label>Tries</label>
+    <table>
+      <thead><tr><th>Target</th><th>Heard</th><th>Match</th><th>Talk</th><th>Think</th></tr></thead>
+      <tbody id="log"></tbody>
+    </table>
+  </section>
+</main>
+
+<script type="module">
+import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1";
+
+const $ = (id) => document.getElementById(id);
+const CHIPS = [["kaffe","norwegian"],["vaffel","norwegian"],["brunost","norwegian"],["en kopp te","norwegian"],["sjokolade","norwegian"],["coffee","english"],["waffle","english"]];
+let lang = "norwegian", asr = null, loading = false;
+
+// --- language + target word -------------------------------------------------
+function setLang(l) {
+  lang = l;
+  for (const b of $("lang").children) b.setAttribute("aria-pressed", String(b.dataset.lang === l));
+}
+$("lang").onclick = (e) => { const b = e.target.closest("button"); if (b) setLang(b.dataset.lang); };
+for (const [w, l] of CHIPS) {
+  const b = document.createElement("button");
+  b.textContent = w;
+  b.onclick = () => { $("target").value = w; setLang(l); };
+  $("chips").appendChild(b);
+}
+
+// --- model loading ------------------------------------------------------------
+// WebGPU first (fast), then the CPU path, which every iPad can run.
+function attempts() {
+  const list = [];
+  if (navigator.gpu) list.push({ device: "webgpu", dtype: { encoder_model: "fp32", decoder_model_merged: "q4" }, name: "graphics chip" });
+  list.push({ device: "wasm", dtype: "q8", name: "processor" });
+  return list;
+}
+
+$("load").onclick = async () => {
+  if (loading) return;
+  loading = true;
+  $("load").disabled = $("talk").disabled = true;
+  asr = null;
+  const id = $("model").value;
+  const files = new Map();
+  $("prog").hidden = false;
+  for (const a of attempts()) {
+    try {
+      $("status").textContent = `Loading on the ${a.name}…`;
+      const t0 = performance.now();
+      asr = await pipeline("automatic-speech-recognition", id, {
+        device: a.device, dtype: a.dtype,
+        progress_callback: (p) => {
+          if (p.status === "progress" && p.total) {
+            files.set(p.file, [p.loaded, p.total]);
+            let l = 0, t = 0;
+            for (const [x, y] of files.values()) { l += x; t += y; }
+            $("prog").value = (100 * l) / t;
+            $("status").textContent = `Downloading ${(l / 1e6).toFixed(0)} of ${(t / 1e6).toFixed(0)} MB (only the first time)…`;
+          }
+        },
+      });
+      // Warm up so the first real try isn't slow.
+      $("status").textContent = "Warming up…";
+      await asr(new Float32Array(16000), { language: "norwegian", task: "transcribe" });
+      const secs = ((performance.now() - t0) / 1000).toFixed(1);
+      $("status").textContent = `Ready on the ${a.name} (${secs} s to load). Hold the button and say the word.`;
+      break;
+    } catch (err) {
+      console.error(err);
+      asr = null;
+      $("status").textContent = `Couldn't load on the ${a.name}: ${err.message || err}`;
+    }
+  }
+  $("prog").hidden = true;
+  $("load").disabled = false;
+  $("talk").disabled = !asr;
+  $("talk").textContent = asr ? "Hold to talk" : "Load a model first";
+  loading = false;
+};
+$("model").onchange = () => { asr = null; $("talk").disabled = true; $("talk").textContent = "Load a model first"; $("status").textContent = "Not loaded yet."; };
+
+// --- microphone -----------------------------------------------------------------
+// The stream stays open after the first press so Safari only asks once.
+let ctx, stream, node, chunks = [], recording = false, held = false, startedAt = 0;
+
+async function ensureMic() {
+  if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+  if (ctx.state !== "running") await ctx.resume();
+  if (!stream) {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    const src = ctx.createMediaStreamSource(stream);
+    node = ctx.createScriptProcessor(4096, 1, 1);
+    node.onaudioprocess = (e) => {
+      const d = e.inputBuffer.getChannelData(0);
+      let m = 0;
+      for (let i = 0; i < d.length; i++) m = Math.max(m, Math.abs(d[i]));
+      $("level").firstElementChild.style.width = recording ? Math.min(100, m * 140) + "%" : "0";
+      if (recording) chunks.push(new Float32Array(d));
+    };
+    src.connect(node);
+    node.connect(ctx.destination);
+  }
+}
+
+// Whisper wants 16 kHz mono.
+async function to16k(samples, rate) {
+  if (rate === 16000) return samples;
+  const off = new OfflineAudioContext(1, Math.ceil((samples.length * 16000) / rate), 16000);
+  const buf = off.createBuffer(1, samples.length, rate);
+  buf.copyToChannel(samples, 0);
+  const s = off.createBufferSource();
+  s.buffer = buf;
+  s.connect(off.destination);
+  s.start();
+  return (await off.startRendering()).getChannelData(0);
+}
+
+async function start(e) {
+  e.preventDefault();
+  if (!asr || recording) return;
+  held = true;
+  talkBtn.setPointerCapture?.(e.pointerId);
+  try { await ensureMic(); } catch (err) {
+    $("result").innerHTML = `<span class="bad">No microphone:</span> ${esc(err.message || err.name)}`;
+    return;
+  }
+  // The first press may have been spent on Safari's permission prompt.
+  if (!held) return;
+  chunks = [];
+  recording = true;
+  startedAt = performance.now();
+  $("talk").classList.add("rec");
+  $("talk").textContent = "Listening… let go when done";
+  $("result").textContent = "";
+  $("detail").textContent = "";
+}
+
+async function stop(e) {
+  e.preventDefault();
+  held = false;
+  if (!recording) return;
+  // Keep a short tail so the last sound isn't cut off.
+  await new Promise((r) => setTimeout(r, 200));
+  recording = false;
+  const talk = (performance.now() - startedAt) / 1000;
+  $("talk").classList.remove("rec");
+  $("talk").textContent = "Thinking…";
+  $("talk").disabled = true;
+  const len = chunks.reduce((n, c) => n + c.length, 0);
+  const all = new Float32Array(len);
+  let o = 0;
+  for (const c of chunks) { all.set(c, o); o += c.length; }
+  const target = $("target").value.trim();
+  try {
+    const audio = await to16k(all, ctx.sampleRate);
+    const t0 = performance.now();
+    const out = await asr(audio, lang ? { language: lang, task: "transcribe" } : { task: "transcribe" });
+    const think = (performance.now() - t0) / 1000;
+    const heard = (out.text || "").trim();
+    const score = matchScore(heard, target);
+    const ok = score >= 0.75;
+    $("result").innerHTML = `${ok ? '<span class="ok">✓ Riktig</span>' : '<span class="bad">✗ Not a match</span>'} &nbsp;“${esc(heard) || "…"}”`;
+    $("detail").textContent = `Match ${(score * 100).toFixed(0)}% · you talked ${talk.toFixed(1)} s · recognised in ${think.toFixed(2)} s`;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${esc(target)}</td><td>${esc(heard)}</td><td class="${ok ? "ok" : "bad"}">${(score * 100).toFixed(0)}%</td><td>${talk.toFixed(1)} s</td><td>${think.toFixed(2)} s</td>`;
+    $("log").prepend(tr);
+  } catch (err) {
+    console.error(err);
+    $("result").innerHTML = `<span class="bad">Error:</span> ${esc(err.message || String(err))}`;
+  }
+  $("talk").disabled = false;
+  $("talk").textContent = "Hold to talk";
+}
+
+const talkBtn = $("talk");
+talkBtn.addEventListener("pointerdown", start);
+for (const ev of ["pointerup", "pointercancel", "pointerleave"]) talkBtn.addEventListener(ev, stop);
+talkBtn.addEventListener("contextmenu", (e) => e.preventDefault());
+
+// --- matching -------------------------------------------------------------------
+// Close enough counts: compare the target with every same-length run of heard words.
+function norm(s) {
+  return s.toLowerCase().normalize("NFC").replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
+}
+function lev(a, b) {
+  const d = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = d[0];
+    d[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = d[j];
+      d[j] = Math.min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = tmp;
+    }
+  }
+  return d[b.length];
+}
+function sim(a, b) { return a || b ? 1 - lev(a, b) / Math.max(a.length, b.length) : 1; }
+function matchScore(heard, target) {
+  const h = norm(heard).split(" ").filter(Boolean), t = norm(target);
+  if (!t) return 0;
+  const n = t.split(" ").length;
+  let best = sim(h.join(" "), t);
+  for (let i = 0; i + n <= h.length; i++) best = Math.max(best, sim(h.slice(i, i + n).join(" "), t));
+  return best;
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
+</script>
+</body>
+</html>
