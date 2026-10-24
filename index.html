@@ -4279,8 +4279,10 @@ addEventListener("hashchange", checkLink);
 setTimeout(checkLink, 1900);
 
 // ---------- what's new: pops up once after a new release (bump APP_VERSION and add a note each release) ----------
-const APP_VERSION = 45;
+const APP_VERSION = 46;
 const NEWS = [
+  { v: 46, title: "Riktig med en gang", items: [
+    ["⚡", "Kaffebar now checks while you talk. Say the word, even in the middle of a sentence, and it counts right away."]] },
   { v: 45, title: "Norsk først", items: [
     ["🔄", "Some Quizlet lists had a few pairs the wrong way round, with English where the Norwegian should be. Kaffebar now spots those and turns them round, so the voice listens for the right language."],
     ["📋", "It checks every saved list, and new ones when you add them."]] },
@@ -4392,7 +4394,7 @@ async function voiceLoad() {
 }
 // The mic opens when Først! starts and closes when you leave it. Switching the iPad's audio mode
 // mid-game makes the music click and adds a delay, so it stays ready and only records on a team's turn.
-const LISTEN_MS = 6000, RETRY_MS = 5000, PRE_CHUNKS = 10;
+const LISTEN_MS = 8000, RETRY_MS = 5000, PRE_CHUNKS = 10;
 function voiceArm() {
   if (!voiceReady() || VO.stream || VO.arming) return;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -4420,7 +4422,7 @@ function voiceArm() {
         // between turns: keep the last ~0.4 s, so a word started on the tap isn't cut off
         if (VO.stage !== "listen") { VO.pre.push(d); if (VO.pre.length > PRE_CHUNKS) VO.pre.shift(); VO.floor = VO.floor ? VO.floor * .95 + rms * .05 : rms; return; }
         VO.chunks.push(d); VO.frames++; VO.peak = Math.max(VO.peak, m);
-        voiceLevel(rms, d.length / ctx.sampleRate);
+        voiceLevel(rms, d.length / ctx.sampleRate); voicePeek();
       };
       src.connect(node); node.connect(mute); mute.connect(ctx.destination);
       VO.src = src; VO.node = node; VO.mute = mute;
@@ -4441,6 +4443,8 @@ function voiceListen(i) {
   if (!VO.stream) { voiceArm(); return false; }   // not ready yet: this round is judged by hand
   stopTimers(); ++VO.run;
   if (VO.ctx.state !== "running") VO.ctx.resume().catch(() => {});
+  const [no, en] = B.deck[B.idx]; VO.col = B.showNo ? 1 : 0; VO.answer = B.showNo ? en : no; VO.lang = B.showNo ? "english" : "norwegian";
+  VO.words = voiceWords(VO.answer, VO.col); VO.lastPeek = Date.now(); VO.peekP = null;
   VO.rec = i; VO.stage = "listen"; VO.chunks = VO.pre.slice(); VO.frames = 0; VO.peak = 0; VO.spoke = 0; VO.quiet = 0; VO.lvl = 0; VO.t0 = Date.now();
   voiceDuck(true);
   clearTimeout(VO.safety); VO.safety = setTimeout(() => voiceStop(), LISTEN_MS);
@@ -4479,25 +4483,45 @@ function voiceAbort() {
   VO.stage = null; VO.rec = null; document.documentElement.style.setProperty("--lvl", 0);
 }
 function voiceClose() { voiceAbort(); voiceOff(); }
+// while the team talks, the words so far are checked about once a second; the answer counts the
+// moment it's heard, even in the middle of a sentence
+function voicePeek() {
+  if (VO.peekP || VO.stage !== "listen" || VO.spoke < 2 || Date.now() - VO.lastPeek < 700) return;
+  VO.lastPeek = Date.now();
+  const run = VO.run, i = VO.rec, chunks = VO.chunks.slice();
+  VO.peekP = (async () => {
+    try {
+      const heard = await voiceHear(await voiceTo16k(chunks, VO.rate), VO.lang, VO.words);
+      if (run === VO.run && (VO.stage === "listen" || VO.stage === "think") && voiceScore(heard, VO.answer) >= .8) voiceWin(i);
+    } catch (err) { console.warn(err); }
+    VO.peekP = null;
+  })();
+}
+function voiceWin(i) {
+  VO.run++; clearTimeout(VO.safety);
+  if (VO.stage === "listen") voiceDuck(false);
+  VO.stage = null; VO.rec = null; document.documentElement.style.setProperty("--lvl", 0);
+  if (S.mode !== "buzz" || B.phase !== "buzzed" || B.buzzed !== i) return renderPads();
+  addPoints(i, 2); sfx.yay(); B.phase = "reveal"; renderBuzz();
+  celebrate(i, 2, "RIKTIG!", B.deck[B.idx][B.showNo ? 1 : 0]);
+}
 async function voiceStop() {
   if (VO.stage !== "listen") return;
   const i = VO.rec, run = VO.run; clearTimeout(VO.safety);
-  VO.stage = "think"; VO.rec = null; voiceDuck(false);
+  VO.stage = "think"; voiceDuck(false);
   document.documentElement.style.setProperty("--lvl", 0);
   renderBuzz();
-  const [no, en] = B.deck[B.idx], answer = B.showNo ? en : no, lang = B.showNo ? "english" : "norwegian", col = B.showNo ? 1 : 0;
+  if (VO.peekP) await VO.peekP;   // one recognition at a time; it may already have found the word
+  if (run !== VO.run) return;
   let heard = "";
   try {
     const audio = await voiceTo16k(VO.chunks, VO.rate);
-    if (audio.length > 4000 && VO.peak > .01) heard = await voiceHear(audio, lang, voiceWords(answer, col));
+    if (audio.length > 4000 && VO.peak > .01) heard = await voiceHear(audio, VO.lang, VO.words);
   } catch (err) { console.warn(err); }
   if (run !== VO.run) return;
-  VO.stage = null;
+  if (heard && voiceMatch(heard, VO.answer, VO.col)) return voiceWin(i);
+  VO.stage = null; VO.rec = null;
   if (S.mode !== "buzz" || B.phase !== "buzzed" || B.buzzed !== i) return renderPads();
-  if (heard && voiceMatch(heard, answer, col)) {
-    addPoints(i, 2); sfx.yay(); B.phase = "reveal"; renderBuzz();
-    return celebrate(i, 2, "RIKTIG!", B.deck[B.idx][col]);
-  }
   sfx.miss(); VO.heard = heard; VO.tries++;
   // two tries, then the other teams get a go
   if (VO.tries >= 2) { toast(heard ? `Hørte «${esc(heard)}» · ${TEAMS[i].name} passes` : `${TEAMS[i].name} passes`); return passBuzz(); }
