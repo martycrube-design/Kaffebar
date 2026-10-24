@@ -113,23 +113,16 @@ body.voice-live .pad { touch-action: none; -webkit-touch-callout: none; }
 .pad.buzzed.rec .pad-score { background: rgba(255,255,255,.45); }
 body.voice-busy .say-bar { visibility: hidden; }
 .pad.think .pad-hint { background: var(--muted); }
-.pad.rec .pad-hint { font-size: clamp(15px, 2.6vmin, 24px); }
-/* the turn prompt on the card: whose turn, and whether the mic is listening */
-.vbox { display: flex; align-items: center; gap: 2vmin; padding: 1vmin 3vmin 1vmin 1vmin; border-radius: 999px;
-  background: color-mix(in srgb, var(--c) 16%, var(--white)); box-shadow: inset 0 0 0 3px var(--c); max-width: 100%; }
-.vmic { flex: none; width: clamp(48px, 9vmin, 88px); aspect-ratio: 1; border-radius: 50%; display: grid; place-items: center; background: var(--c); color: var(--white); }
-.vmic svg { width: 54%; height: 54%; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.vtxt { display: flex; flex-direction: column; text-align: left; gap: .2em; min-width: 0; }
-.vtxt b { font-family: var(--display); font-weight: 800; font-size: clamp(18px, 3.7vmin, 36px); line-height: 1.1; color: var(--ink); }
-.vtxt small { font-size: clamp(12px, 1.9vmin, 17px); font-weight: 700; color: var(--muted); }
-.vbox.listen { background: #fff0ee; box-shadow: inset 0 0 0 3px #ff4a3d; }
-.vbox.listen .vmic { background: #ff4a3d; transform: scale(calc(1 + var(--lvl, 0) * .35)); box-shadow: 0 0 0 calc(3px + var(--lvl, 0) * 30px) rgba(255, 74, 61, .28); transition: transform .09s, box-shadow .09s; }
-.vbox .btn.vdone { min-height: 48px; margin-left: 1vmin; background: #ff4a3d; color: var(--white); box-shadow: 0 4px 0 rgba(0,0,0,.3); }
-.host.side .vbox { padding: 3vmin 1vmin 1vmin; }
-.host.side .vbox .btn.vdone { margin: 1vmin 0 0; padding: 14px 0; }
-.vbox.listen .vtxt b { color: #c62828; }
-.vbox.think .vmic { background: var(--muted); animation: vblink .7s ease-in-out infinite alternate; }
-@keyframes vblink { to { opacity: .45; } }
+.pad.rec .pad-hint, .pad.arm .pad-hint { font-size: clamp(15px, 2.6vmin, 24px); }
+.pad-mic { flex: none; width: clamp(44px, 7.5vmin, 72px); aspect-ratio: 1; border-radius: 50%; display: grid; place-items: center; background: var(--c); color: var(--white); }
+.pad-mic svg { width: 56%; height: 56%; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.pad.arm .pad-mic { animation: mic-blink .55s ease-in-out infinite alternate; }
+@keyframes mic-blink { from { transform: scale(1); box-shadow: 0 0 0 0 var(--c); } to { transform: scale(1.12); box-shadow: 0 0 0 10px transparent; opacity: .55; } }
+.pad.rec .pad-mic { background: var(--white); color: #ff4a3d; transform: scale(calc(1 + var(--lvl, 0) * .35)); box-shadow: 0 0 0 calc(var(--lvl, 0) * 22px) rgba(255,255,255,.35); transition: transform .09s, box-shadow .09s; }
+.pad-timer { flex: none; width: clamp(70px, 14vmin, 150px); height: 12px; border-radius: 999px; background: rgba(0,0,0,.14); overflow: hidden; }
+.pad-timer i { display: block; height: 100%; border-radius: inherit; background: var(--c); transform-origin: left; animation: pad-timer var(--ms) linear var(--d) forwards; }
+.pad.rec .pad-timer i { background: var(--white); }
+@keyframes pad-timer { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 .pad.buzzed .pad-name { color: color-mix(in srgb, var(--c) 70%, var(--ink)); }
 .pad.buzzed .pad-score { background: var(--c); }
 .pad.out, .pad.idle { opacity: .4; filter: saturate(.5); }
@@ -1716,7 +1709,7 @@ function renderPads() {
     p.dataset.team = i;
     p.style.visibility = S.mode === "bomb" && X.phase === "boom" && X.loser === i && Date.now() < X.shatterUntil ? "hidden" : "";
     p.style.setProperty("--c", TEAMS[i].color);
-    p.classList.remove("live", "buzzed", "out", "turn", "idle", "edit", "res-ok", "res-bad", "bomb-out", "bomb-win", "rec", "think");
+    p.classList.remove("live", "buzzed", "out", "turn", "idle", "edit", "res-ok", "res-bad", "bomb-out", "bomb-win", "rec", "think", "arm");
     if (S.mode === "bomb" && X.out.includes(i)) p.classList.add("bomb-out");
     if (S.mode === "bomb" && X.phase === "won" && X.winner === i) p.classList.add("bomb-win");
     if (S.mode === "quiz" && Q.phase === "reveal" && !Q.duel && Q.res && i in Q.res && !Object.values(Q.res).every(Boolean)) p.classList.add(Q.res[i] ? "res-ok" : "res-bad");
@@ -1734,10 +1727,12 @@ function renderPads() {
     let hint = "", turnOf = null, extra = "";
     if (S.mode === "buzz") {
       const vs = B.buzzed === i && B.phase === "buzzed" ? VO.stage : null;
-      if (vs === "listen") { p.classList.add("buzzed", "rec"); hint = "🎙️ Snakk nå!"; }
+      // the turn's timer lives on the team's own bar
+      const timer = (ms, end) => `<span class="pad-timer" style="--ms:${ms}ms;--d:${Math.min(0, end - Date.now() - ms)}ms"><i></i></span>`;
+      if (vs === "arm") { p.classList.add("buzzed", "arm"); hint = "Trykk mikrofonen"; extra = `<span class="pad-mic">${MIC_SVG}</span>${timer(ARM_MS, VO.armEnd)}`; }
+      else if (vs === "listen") { p.classList.add("buzzed", "rec"); hint = "Snakk nå!"; extra = `<span class="pad-mic">${MIC_SVG}</span>${timer(LISTEN_MS, VO.t0 + LISTEN_MS)}`; }
       else if (vs === "think") { p.classList.add("buzzed", "think"); hint = "Sjekker…"; }
-      else if (vs === "retry") { p.classList.add("buzzed"); hint = `Trykk · prøv igjen ${sayLeft()}`; }
-      else if (B.buzzed === i) { p.classList.add("buzzed"); hint = B.phase === "check" ? "Riktig?" : `Si det! ${sayLeft()}`; }
+      else if (B.buzzed === i) { p.classList.add("buzzed"); hint = B.phase === "check" ? "Riktig?" : "Si det!"; if (B.phase === "buzzed") extra = timer(SAY_MS, B.sayEnd); }
       else if (B.out.has(i)) { p.classList.add("out"); hint = "Vent"; }
       else if (B.phase === "open") { p.classList.add("live"); hint = "Trykk!"; }
       else if (B.phase === "ready") hint = "Klar…";
@@ -1803,7 +1798,7 @@ Object.values(pads).forEach(p => p.addEventListener("pointerdown", e => {
   }
   e.preventDefault();
   if (P.stack.length) return;
-  if (S.mode === "buzz") { const t = +p.dataset.team; if (B.phase === "buzzed" && B.buzzed === t) { if (VO.stage === "listen") voiceStop(); else voiceListen(t); } else buzz(t); }
+  if (S.mode === "buzz") { const t = +p.dataset.team; if (B.phase === "buzzed" && B.buzzed === t) { if (VO.stage === "arm") voiceListen(t); } else buzz(t); }
   if (S.mode === "bomb") passBomb(+p.dataset.team);
   const opt = e.target.closest("[data-opt]");
   if (S.mode === "quiz" && opt) pickQuiz(+p.dataset.team, +opt.dataset.opt);
@@ -1990,7 +1985,7 @@ function pauseGame() {
     const ring = center.querySelector("#qring"); if (ring) { ring.style.transition = "none"; ring.style.strokeDashoffset = 276.5 * (1 - Math.max(0, paused.left / QTIME)); }
   }
   else if (S.mode === "bomb" && X.phase === "live") paused = { m: "bomb", left: X.fuseEnd - now };
-  else if (S.mode === "buzz" && B.phase === "buzzed") { if (VO.stage === "listen" || VO.stage === "think") { voiceAbort(); VO.stage = "retry"; } paused = { m: "buzz", left: Math.max(RETRY_MS * (VO.stage ? 1 : 0), B.sayEnd - now) }; }
+  else if (S.mode === "buzz" && B.phase === "buzzed") { if (VO.stage) { voiceAbort(); paused = { m: "arm" }; } else paused = { m: "buzz", left: B.sayEnd - now }; }
   else if (S.mode === "buzz" && B.phase === "ready") paused = { m: "ready" };
   else return;
   stopTimers(); cancelAnimationFrame(X.raf);
@@ -2001,6 +1996,7 @@ function resumeGame() {
   if (p.m === "charades") { V.endAt = now + p.left; tickCharades(); }
   if (p.m === "quiz") { Q.endAt = now + p.left; runQuizClock(p.left); }
   if (p.m === "buzz" && B.phase === "buzzed") runSayClock(Math.max(400, p.left));
+  if (p.m === "arm" && B.phase === "buzzed") voiceTurn(B.buzzed);
   if (p.m === "ready" && B.phase === "ready") readyTick();
   if (p.m === "bomb") { X.fuseEnd = now + p.left; tickBomb(); X.raf = requestAnimationFrame(bombFrame); }
 }
@@ -2279,21 +2275,22 @@ function readyTick() {
 const SAY_MS = 3000;
 function buzz(i) {
   if (B.phase !== "open" || B.out.has(i) || Date.now() < B.armedAt) return;
-  B.buzzed = i; B.phase = "buzzed"; sfx.buzz(); VO.tries = 0; VO.heard = ""; VO.stage = null;
-  // with Stemme on, the mic starts listening right after the tap
-  if (!voiceListen(i)) runSayClock(SAY_MS);
+  B.buzzed = i; B.phase = "buzzed"; sfx.buzz(); VO.heard = ""; VO.stage = null;
+  // with Stemme on, the team gets a blinking mic to tap; without it, 3 seconds to say it
+  if (!voiceTurn(i)) runSayClock(SAY_MS);
 }
 // the team that buzzed has 3 seconds to say it; when time runs out it passes to the others
 function runSayClock(left) {
   stopTimers(); B.sayEnd = Date.now() + left; B.sayLeft = left; renderBuzz();
-  for (let k = Math.ceil(left / 1000) - 1; k >= 1; k--) later(() => { tone(880, 0, .05, "square", .07); renderPads(); }, left - k * 1000);
+  for (let k = Math.ceil(left / 1000) - 1; k >= 1; k--) later(() => tone(880, 0, .05, "square", .07), left - k * 1000);
   later(() => { if (B.phase !== "buzzed") return; sfx.miss(); toast(`Tiden er ute! ${TEAMS[B.buzzed].name} passes`); passBuzz(); }, left);
 }
 function passBuzz() {
   stopTimers();
   B.out.add(B.buzzed); B.buzzed = null;
-  B.phase = B.out.size >= S.teams ? "reveal" : "open"; B.armedAt = Date.now() + 300;
-  renderBuzz();
+  // the other teams get the same word after a fresh 3-2-1
+  if (B.out.size >= S.teams) { B.phase = "reveal"; return renderBuzz(); }
+  B.phase = "ready"; B.count = 3; renderBuzz(); readyTick();
 }
 const sayLeft = () => Math.max(0, Math.ceil((B.sayEnd - Date.now()) / 1000));
 function renderBuzz(enter) {
@@ -2313,11 +2310,11 @@ function renderBuzz(enter) {
     <span class="main ${sizeClass(prompt)}">${prompt}</span>
     ${shown ? `<span class="ans shown">${answer}</span>` : ""}
     ${B.phase === "reveal" ? `<span class="say">Alle sammen · everyone say it together</span>` : ""}
-    ${B.phase === "buzzed" && (!VO.stage || VO.stage === "retry") ? `<span class="say-bar" style="--ms:${B.sayLeft}ms;--f:${(B.sayLeft / SAY_MS).toFixed(3)}"><i></i></span>` : ""}`;
+`;
   let host = "";
   if (B.phase === "open") host = `<button class="btn soft" data-act="reveal">Vis svaret</button>`;
   if (B.phase === "buzzed") host = `<button class="btn primary" data-act="check">Show answer</button><button class="btn" data-act="pass">Pass to others</button>`;
-  if (B.phase === "buzzed" && VO.stage) host = voiceBox();
+  if (B.phase === "buzzed" && VO.stage) host = "";
   if (B.phase === "check") host = `<span class="status">Did they say it?</span><button class="btn ok" data-act="right">Riktig! +2</button><button class="btn warm" data-act="close">Nesten! +1</button><button class="btn" data-act="nope">Neste gang</button>`;
   if (B.phase === "reveal") host = `<button class="btn primary" data-act="next">Neste kort →</button>`;
   show(card(half, enter), host, B.phase === "buzzed" || B.phase === "check" ? B.buzzed : null, B.phase === "buzzed" && !!VO.stage);
@@ -3956,7 +3953,6 @@ center.addEventListener("click", e => {
     case "board-resume": if (F.phase !== "resume") return; sfx.yay(); ON().forEach(i => { if (!F.seen[i]) resetSlot(i); }); return turnSweep(S.on[F.turn] ? F.turn : nextOn(F.turn));
     case "peek": F.peek = !F.peek; sfx.flip(); return renderBoard();
     case "reveal": B.phase = "reveal"; sfx.reveal(); return renderBuzz();
-    case "vdone": return voiceStop();
     case "check": if (B.phase !== "buzzed") return; voiceAbort(); stopTimers(); B.phase = "check"; sfx.reveal(); return renderBuzz();
     case "right": {
       const t = B.buzzed, w = B.deck[B.idx][B.showNo ? 1 : 0];
@@ -4279,8 +4275,12 @@ addEventListener("hashchange", checkLink);
 setTimeout(checkLink, 1900);
 
 // ---------- what's new: pops up once after a new release (bump APP_VERSION and add a note each release) ----------
-const APP_VERSION = 46;
+const APP_VERSION = 47;
 const NEWS = [
+  { v: 47, title: "Én sjanse", items: [
+    ["👆", "Tap your bar first. Then a <b>blinking mic</b> shows on your bar, and you have 5 seconds to tap it."],
+    ["🎙️", "After you tap the mic you have <b>3 seconds</b> to say it. The timers are on your own bar."],
+    ["🔁", "One chance. If you miss, the other teams get a 3, 2, 1 and can tap for the same word."]] },
   { v: 46, title: "Riktig med en gang", items: [
     ["⚡", "Kaffebar now checks while you talk. Say the word, even in the middle of a sentence, and it counts right away."]] },
   { v: 45, title: "Norsk først", items: [
@@ -4346,14 +4346,6 @@ const VO = { on: load("kaffebar-voice", false), asr: null, loading: false, pct: 
 const VOICE_MODEL = "onnx-community/whisper-base";
 const voiceReady = () => VO.on && !!VO.asr;
 const MIC_SVG = '<svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21M8.5 21h7"/></svg>';
-// what the card says while a team answers out loud
-function voiceBox() {
-  const t = TEAMS[B.buzzed], st = VO.stage;
-  const big = st === "listen" ? "Snakk nå!" : st === "think" ? "Sjekker…" : VO.heard ? `Hørte «${esc(VO.heard)}»` : "Hørte ingenting";
-  const small = st === "listen" ? "Say the word" : st === "think" ? "" : "Tap your bar to try again";
-  const done = st === "listen" ? `<button class="btn vdone" data-act="vdone">Ferdig ✓</button>` : "";
-  return `<span class="vbox ${st}" style="--c:${t.color}"><span class="vmic">${MIC_SVG}</span><span class="vtxt"><b>${big}</b>${small ? `<small>${small}</small>` : ""}</span>${done}</span>`;
-}
 function voiceCard() {
   const bad = VO.micErr || VO.err;
   const state = VO.loading ? `Laster ${Math.round(VO.pct)}%` : VO.on && bad ? "Feil" : VO.on && VO.asr ? "På" : VO.on ? "Venter" : "Av";
@@ -4394,7 +4386,7 @@ async function voiceLoad() {
 }
 // The mic opens when Først! starts and closes when you leave it. Switching the iPad's audio mode
 // mid-game makes the music click and adds a delay, so it stays ready and only records on a team's turn.
-const LISTEN_MS = 8000, RETRY_MS = 5000, PRE_CHUNKS = 10;
+const ARM_MS = 5000, LISTEN_MS = 3000, PRE_CHUNKS = 10;
 function voiceArm() {
   if (!voiceReady() || VO.stream || VO.arming) return;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -4437,10 +4429,19 @@ function voiceArm() {
 }
 // back to plain playback, which keeps sound on with the silent switch
 function voiceSession() { try { if (navigator.audioSession && !VO.stream) navigator.audioSession.type = "playback"; } catch (_) {} }
-function voiceListen(i) {
-  if (!voiceReady() || VO.stage === "listen" || VO.stage === "think") return false;
-  if (S.mode !== "buzz" || B.phase !== "buzzed" || B.buzzed !== i) return false;
+// the team that buzzed has 5 seconds to tap its blinking mic, then 3 seconds to say it
+function voiceTurn(i) {
+  if (!voiceReady()) return false;
   if (!VO.stream) { voiceArm(); return false; }   // not ready yet: this round is judged by hand
+  stopTimers(); ++VO.run;
+  VO.stage = "arm"; VO.rec = i; VO.armEnd = Date.now() + ARM_MS;
+  for (let k = 1; k < ARM_MS / 1000; k++) later(() => tone(880, 0, .05, "square", .06), k * 1000);
+  later(() => { if (VO.stage === "arm" && B.buzzed === i) voiceMiss(i, "Tiden er ute!"); }, ARM_MS);
+  renderBuzz(); return true;
+}
+function voiceListen(i) {
+  if (!voiceReady() || VO.stage !== "arm" || !VO.stream) return false;
+  if (S.mode !== "buzz" || B.phase !== "buzzed" || B.buzzed !== i) return false;
   stopTimers(); ++VO.run;
   if (VO.ctx.state !== "running") VO.ctx.resume().catch(() => {});
   const [no, en] = B.deck[B.idx]; VO.col = B.showNo ? 1 : 0; VO.answer = B.showNo ? en : no; VO.lang = B.showNo ? "english" : "norwegian";
@@ -4456,7 +4457,7 @@ function voiceDuck(on) {
   const g = musicGain.gain, t = actx.currentTime, to = SND.music ? (on ? .12 : .55) : 0;
   try { g.cancelScheduledValues(t); g.setValueAtTime(g.value, t); g.setTargetAtTime(to, t, on ? .06 : .25); } catch (_) {}
 }
-// level drives the pulsing mic; speech = louder than the room, done = 0.8 s of quiet after speaking
+// level drives the pulsing mic; speech = louder than the room
 function voiceLevel(rms, dur) {
   const t = Date.now() - VO.t0;
   VO.lvl = Math.max(Math.min(1, rms * 9), VO.lvl * .7);
@@ -4464,9 +4465,7 @@ function voiceLevel(rms, dur) {
   if (t < 200) return;   // the buzz sound
   const loud = Math.max(.02, VO.floor * 3), soft = Math.max(.012, VO.floor * 1.8);
   if (rms > loud) { VO.spoke++; VO.quiet = 0; }
-  else if (VO.spoke >= 3 && rms < soft) VO.quiet += dur;
-  else VO.quiet = 0;
-  if (VO.spoke >= 3 && VO.quiet >= .8 && t > 900) voiceStop();
+  else if (rms < soft) VO.quiet += dur;
 }
 // leaving Først! or turning Stemme off: release the mic so the iPad's mic light goes out
 function voiceOff() {
@@ -4486,7 +4485,7 @@ function voiceClose() { voiceAbort(); voiceOff(); }
 // while the team talks, the words so far are checked about once a second; the answer counts the
 // moment it's heard, even in the middle of a sentence
 function voicePeek() {
-  if (VO.peekP || VO.stage !== "listen" || VO.spoke < 2 || Date.now() - VO.lastPeek < 700) return;
+  if (VO.peekP || VO.stage !== "listen" || VO.spoke < 2 || Date.now() - VO.lastPeek < 600) return;
   VO.lastPeek = Date.now();
   const run = VO.run, i = VO.rec, chunks = VO.chunks.slice();
   VO.peekP = (async () => {
@@ -4522,10 +4521,13 @@ async function voiceStop() {
   if (heard && voiceMatch(heard, VO.answer, VO.col)) return voiceWin(i);
   VO.stage = null; VO.rec = null;
   if (S.mode !== "buzz" || B.phase !== "buzzed" || B.buzzed !== i) return renderPads();
-  sfx.miss(); VO.heard = heard; VO.tries++;
-  // two tries, then the other teams get a go
-  if (VO.tries >= 2) { toast(heard ? `Hørte «${esc(heard)}» · ${TEAMS[i].name} passes` : `${TEAMS[i].name} passes`); return passBuzz(); }
-  VO.stage = "retry"; runSayClock(RETRY_MS);
+  voiceMiss(i, heard ? `Hørte «${esc(heard)}»` : "Hørte ingenting");
+}
+// one chance: a miss passes the word to the other teams
+function voiceMiss(i, why) {
+  VO.run++; VO.stage = null; VO.rec = null;
+  if (S.mode !== "buzz" || B.phase !== "buzzed" || B.buzzed !== i) return renderPads();
+  sfx.miss(); toast(`${why} · ${TEAMS[i].name} passes`); passBuzz();
 }
 async function voiceTo16k(chunks, rate) {
   const len = chunks.reduce((n, c) => n + c.length, 0), all = new Float32Array(len);
