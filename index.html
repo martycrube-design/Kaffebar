@@ -123,7 +123,11 @@ body.voice-busy .say-bar { visibility: hidden; }
 .vtxt b { font-family: var(--display); font-weight: 800; font-size: clamp(18px, 3.7vmin, 36px); line-height: 1.1; color: var(--ink); }
 .vtxt small { font-size: clamp(12px, 1.9vmin, 17px); font-weight: 700; color: var(--muted); }
 .vbox.listen { background: #fff0ee; box-shadow: inset 0 0 0 3px #ff4a3d; }
-.vbox.listen .vmic { background: #ff4a3d; box-shadow: 0 0 0 calc(4px + var(--lvl, 0) * 26px) rgba(255, 74, 61, .3); transition: box-shadow .08s; }
+.vbox.listen .vmic { background: #ff4a3d; transform: scale(calc(1 + var(--lvl, 0) * .35)); box-shadow: 0 0 0 calc(3px + var(--lvl, 0) * 30px) rgba(255, 74, 61, .28); transition: transform .09s, box-shadow .09s; }
+.vbox.start .vmic { background: var(--muted); }
+.vbox .btn.vdone { min-height: 48px; margin-left: 1vmin; background: #ff4a3d; color: var(--white); box-shadow: 0 4px 0 rgba(0,0,0,.3); }
+.host.side .vbox { padding: 3vmin 1vmin 1vmin; }
+.host.side .vbox .btn.vdone { margin: 1vmin 0 0; padding: 14px 0; }
 .vbox.listen .vtxt b { color: #c62828; }
 .vbox.think .vmic { background: var(--muted); animation: vblink .7s ease-in-out infinite alternate; }
 @keyframes vblink { to { opacity: .45; } }
@@ -1303,8 +1307,8 @@ function silentWav() {
   return "data:audio/wav;base64," + btoa(bin);
 }
 function unlockAudio() {
-  // "playback" keeps sound on with the silent switch, but blocks the microphone, so Stemme needs play-and-record
-  try { if (navigator.audioSession) navigator.audioSession.type = (() => { try { return VO.on; } catch (_) { return false; } })() ? "play-and-record" : "playback"; } catch (e) {}
+  // "playback" keeps sound on with the silent switch, but blocks the microphone, so it switches only while a team talks
+  try { if (navigator.audioSession) navigator.audioSession.type = (() => { try { return !!VO.stream || VO.stage === "start"; } catch (_) { return false; } })() ? "play-and-record" : "playback"; } catch (e) {}
   if (!silentEl) {
     try { silentEl = new Audio(silentWav()); silentEl.loop = true; silentEl.setAttribute("playsinline", ""); silentEl.setAttribute("webkit-playsinline", ""); } catch (e) {}
   }
@@ -1659,7 +1663,7 @@ function renderPads() {
   document.body.classList.toggle("lanes", S.mode === "quiz");
   document.body.classList.toggle("panel-open", P.stack.length > 0);
   document.body.classList.toggle("voice-live", S.mode === "buzz" && voiceReady());
-  document.body.classList.toggle("voice-busy", VO.stage === "listen" || VO.stage === "think");
+  document.body.classList.toggle("voice-busy", VO.stage === "start" || VO.stage === "listen" || VO.stage === "think");
   // a name being typed would be wiped by a redraw
   if (document.activeElement && document.activeElement.classList.contains("pad-name")) return updateCorners();
   for (const side of ["top", "left", "right", "bottom"]) {
@@ -1688,6 +1692,7 @@ function renderPads() {
     if (S.mode === "buzz") {
       const vs = B.buzzed === i && B.phase === "buzzed" ? VO.stage : null;
       if (vs === "listen") { p.classList.add("buzzed", "rec"); hint = "🎙️ Snakk nå!"; }
+      else if (vs === "start") { p.classList.add("buzzed"); hint = "Mikrofon…"; }
       else if (vs === "think") { p.classList.add("buzzed", "think"); hint = "Sjekker…"; }
       else if (vs === "retry") { p.classList.add("buzzed"); hint = `Trykk · prøv igjen ${sayLeft()}`; }
       else if (B.buzzed === i) { p.classList.add("buzzed"); hint = B.phase === "check" ? "Riktig?" : `Si det! ${sayLeft()}`; }
@@ -1755,7 +1760,7 @@ Object.values(pads).forEach(p => p.addEventListener("pointerdown", e => {
   }
   e.preventDefault();
   if (P.stack.length) return;
-  if (S.mode === "buzz") { const t = +p.dataset.team; if (B.phase === "buzzed" && B.buzzed === t) voiceListen(t); else buzz(t); }
+  if (S.mode === "buzz") { const t = +p.dataset.team; if (B.phase === "buzzed" && B.buzzed === t) { if (VO.stage === "listen") voiceStop(); else voiceListen(t); } else buzz(t); }
   if (S.mode === "bomb") passBomb(+p.dataset.team);
   const opt = e.target.closest("[data-opt]");
   if (S.mode === "quiz" && opt) pickQuiz(+p.dataset.team, +opt.dataset.opt);
@@ -2208,8 +2213,9 @@ panelEl.addEventListener("click", e => {
 
 // ---------- Først! (buzzer race) ----------
 const B = { deck: [], idx: -1, phase: "open", buzzed: null, out: new Set(), showNo: false, armedAt: 0 };
-function startBuzz() { if (voiceReady()) voiceMic(); S.mode = "buzz"; B.deck = shuffle(WORDS); B.idx = -1; nextBuzz(); }
+function startBuzz() { S.mode = "buzz"; B.deck = shuffle(WORDS); B.idx = -1; nextBuzz(); }
 function nextBuzz() {
+  voiceAbort();
   B.idx = (B.idx + 1) % B.deck.length;
   if (B.idx === 0 && B.deck.length) B.deck = shuffle(WORDS);
   B.showNo = S.dir === "no" || (S.dir === "mix" && Math.random() < .5);
@@ -2246,12 +2252,13 @@ function renderBuzz(enter) {
   const half = `
     <span class="lbl">${lbl}</span>
     <span class="main ${sizeClass(prompt)}">${prompt}</span>
-    ${B.phase === "buzzed" && VO.stage ? voiceBox() : `<span class="ans${shown ? " shown" : ""}">${shown ? answer : `<span class="dots">···</span>`}</span>`}
+    <span class="ans${shown ? " shown" : ""}">${shown ? answer : `<span class="dots">···</span>`}</span>
     ${B.phase === "reveal" ? `<span class="say">Alle sammen · everyone say it together</span>` : ""}
     ${B.phase === "buzzed" ? `<span class="say-bar" style="--ms:${B.sayLeft}ms;--f:${(B.sayLeft / SAY_MS).toFixed(3)}"><i></i></span>` : ""}`;
   let host = "";
   if (B.phase === "open") host = `<span class="status">${voiceReady() ? "Tap your side first, then say it!" : "First to tap their side!"}</span><button class="btn" data-act="reveal">Nobody? Show it</button>`;
   if (B.phase === "buzzed") host = `<button class="btn primary" data-act="check">Show answer</button><button class="btn" data-act="pass">Pass to others</button>`;
+  if (B.phase === "buzzed" && VO.stage) host = voiceBox() + (VO.stage === "retry" ? host : "");
   if (B.phase === "check") host = `<span class="status">Did they say it?</span><button class="btn ok" data-act="right">Riktig! +2</button><button class="btn warm" data-act="close">Nesten! +1</button><button class="btn" data-act="nope">Neste gang</button>`;
   if (B.phase === "reveal") host = `<button class="btn primary" data-act="next">Neste kort →</button>`;
   show(card(half, enter), host, B.phase === "buzzed" || B.phase === "check" ? B.buzzed : null);
@@ -3890,7 +3897,8 @@ center.addEventListener("click", e => {
     case "board-resume": if (F.phase !== "resume") return; sfx.yay(); ON().forEach(i => { if (!F.seen[i]) resetSlot(i); }); return turnSweep(S.on[F.turn] ? F.turn : nextOn(F.turn));
     case "peek": F.peek = !F.peek; sfx.flip(); return renderBoard();
     case "reveal": B.phase = "reveal"; sfx.reveal(); return renderBuzz();
-    case "check": if (B.phase !== "buzzed") return; stopTimers(); B.phase = "check"; sfx.reveal(); return renderBuzz();
+    case "vdone": return voiceStop();
+    case "check": if (B.phase !== "buzzed") return; voiceAbort(); stopTimers(); B.phase = "check"; sfx.reveal(); return renderBuzz();
     case "right": {
       const t = B.buzzed, w = B.deck[B.idx][B.showNo ? 1 : 0];
       addPoints(t, 2); sfx.yay(); B.phase = "reveal"; renderBuzz();
@@ -3902,7 +3910,7 @@ center.addEventListener("click", e => {
       return celebrate(t, 1, "NESTEN!", w);
     }
     case "nope": B.phase = "reveal"; sfx.flip(); return renderBuzz();
-    case "pass": if (B.phase !== "buzzed") return; return passBuzz();
+    case "pass": if (B.phase !== "buzzed") return; voiceAbort(); return passBuzz();
     case "next": return nextBuzz();
     case "new-memory": return startMemory();
     case "act-go": return goCharades();
@@ -4212,8 +4220,12 @@ addEventListener("hashchange", checkLink);
 setTimeout(checkLink, 1900);
 
 // ---------- what's new: pops up once after a new release (bump APP_VERSION and add a note each release) ----------
-const APP_VERSION = 42;
+const APP_VERSION = 43;
 const NEWS = [
+  { v: 43, title: "Mikrofonen på din tur", items: [
+    ["🎙️", "The mic only turns on when your team has tapped and it's your turn to talk. It turns off again when you finish."],
+    ["🔴", "Only your side shows <b>Snakk nå!</b>, and the red mic pulses with your voice so you can see it hears you."],
+    ["✅", "Right answers score by themselves. Tap <b>Ferdig ✓</b> (or your bar) to stop talking early."]] },
   { v: 42, title: "Din tur å snakke", items: [
     ["👆", "<b>Tap your bar first.</b> No more holding. The card then says whose turn it is."],
     ["🔴", "The mic turns <b>red</b> and says <b>Lytter… si ordet nå!</b> while it listens. It stops by itself when you finish."],
@@ -4261,16 +4273,17 @@ setTimeout(() => showNews(), 1900);
 // reliable on single learner words: the language token is forced, and the round's word list is
 // passed as Whisper's "previous text", so the spelling leans toward the words we expect.
 const VO = { on: load("kaffebar-voice", false), asr: null, loading: false, pct: 0, err: "", micErr: "", rec: null, stage: null, tries: 0, heard: "", spoke: 0, quiet: 0, floor: 0,
-  ctx: null, stream: null, chunks: [], pre: [], peak: 0, t0: 0, left: 0 };
+  ctx: null, stream: null, chunks: [], blobs: [], peak: 0, t0: 0, run: 0, frames: 0, lvl: 0, rate: 48000 };
 const VOICE_MODEL = "onnx-community/whisper-base";
 const voiceReady = () => VO.on && !!VO.asr;
 const MIC_SVG = '<svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21M8.5 21h7"/></svg>';
 // what the card says while a team answers out loud
 function voiceBox() {
   const t = TEAMS[B.buzzed], st = VO.stage;
-  const big = st === "listen" ? "Lytter… si ordet nå!" : st === "think" ? "Sjekker…" : VO.heard ? `Hørte «${esc(VO.heard)}»` : "Hørte ingenting";
-  const small = st === "listen" ? `${esc(t.name)} sin tur · stops by itself when you finish` : st === "think" ? "Checking what you said" : `Trykk baren og prøv igjen · tap your bar to try again`;
-  return `<span class="vbox ${st}" style="--c:${t.color}"><span class="vmic">${MIC_SVG}</span><span class="vtxt"><b>${big}</b><small>${small}</small></span></span>`;
+  const big = st === "start" ? "Mikrofonen starter…" : st === "listen" ? "Snakk nå!" : st === "think" ? "Sjekker…" : VO.heard ? `Hørte «${esc(VO.heard)}»` : "Hørte ingenting";
+  const small = st === "start" ? "Wait for the red mic" : st === "listen" ? `${esc(t.name)} · say the word, I'm listening` : st === "think" ? "Mic is off · checking what you said" : "Trykk baren og prøv igjen · tap your bar to try again";
+  const done = st === "listen" ? `<button class="btn vdone" data-act="vdone">Ferdig ✓</button>` : "";
+  return `<span class="vbox ${st}" style="--c:${t.color}"><span class="vmic">${MIC_SVG}</span><span class="vtxt"><b>${big}</b><small>${small}</small></span>${done}</span>`;
 }
 function voiceCard() {
   const bad = VO.micErr || VO.err;
@@ -4283,7 +4296,7 @@ function voiceCard() {
 function voiceRefresh() { if (P.stack.at(-1) === "audio") renderPanel(); }
 function voiceToggle() {
   VO.on = !VO.on; store("kaffebar-voice", VO.on); sfx.pick(); VO.micErr = "";
-  if (VO.on) { voiceMic(); voiceLoad(); } else voiceClose();
+  if (VO.on) voiceLoad(); else voiceClose();
   voiceRefresh();
 }
 async function voiceLoad() {
@@ -4310,83 +4323,103 @@ async function voiceLoad() {
   } catch (err) { console.warn(err); VO.err = "No internet to download the speech model"; }
   VO.loading = false; voiceRefresh(); if (S.mode === "buzz") renderBuzz();
 }
-// Opened on a tap so Safari shows its prompt; kept open while a game runs, with a short pre-roll.
-function voiceMic() {
-  if (VO.stream || VO.asking) return;
-  try {
-    VO.ctx = VO.ctx || new (window.AudioContext || window.webkitAudioContext)(); VO.ctx.resume();
-  } catch (_) { return; }
+// The mic is only on while a team is answering: it opens on their tap and closes when they finish.
+const LISTEN_MS = 6000, RETRY_MS = 5000;
+function voiceListen(i) {
+  if (!voiceReady() || VO.stage === "start" || VO.stage === "listen" || VO.stage === "think") return false;
+  if (S.mode !== "buzz" || B.phase !== "buzzed" || B.buzzed !== i) return false;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     VO.micErr = "This browser can't use the microphone here. Open Kaffebar in Safari.";
-    voiceRefresh(); return toast("🎙️ " + VO.micErr);
+    toast("🎙️ " + VO.micErr); return false;
   }
+  stopTimers();
+  // still inside the tap: Safari only starts audio and shows its mic prompt from a tap
+  ensureAudio(); VO.ctx = actx;
   try { if (navigator.audioSession) navigator.audioSession.type = "play-and-record"; } catch (_) {}
-  VO.asking = true;
+  const run = ++VO.run;
+  VO.rec = i; VO.stage = "start"; VO.chunks = []; VO.blobs = []; VO.peak = 0; VO.spoke = 0; VO.quiet = 0; VO.floor = 0; VO.frames = 0;
+  renderBuzz();
   // the plain request is the fallback: some iPad setups reject the processing options
-  const ask = () => navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
-    .catch(err => err.name === "NotAllowedError" || err.name === "SecurityError" ? Promise.reject(err) : navigator.mediaDevices.getUserMedia({ audio: true }));
-  ask().then(s => {
-    VO.stream = s;
-    try {
-      const node = VO.ctx.createScriptProcessor(4096, 1, 1);
+  navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+    .catch(err => err.name === "NotAllowedError" || err.name === "SecurityError" ? Promise.reject(err) : navigator.mediaDevices.getUserMedia({ audio: true }))
+    .then(stream => {
+      if (run !== VO.run || VO.stage !== "start") { stream.getTracks().forEach(tr => tr.stop()); return; }
+      VO.stream = stream; VO.micErr = "";
+      const ctx = VO.ctx; if (ctx.state !== "running") ctx.resume().catch(() => {});
+      VO.rate = ctx.sampleRate;
+      const src = ctx.createMediaStreamSource(stream), node = ctx.createScriptProcessor(2048, 1, 1), mute = ctx.createGain();
+      mute.gain.value = 0;
       node.onaudioprocess = e => {
+        if (VO.stage !== "listen") return;
         const d = new Float32Array(e.inputBuffer.getChannelData(0));
-        let m = 0; for (let k = 0; k < d.length; k++) m = Math.max(m, Math.abs(d[k]));
-        if (VO.stage !== "listen") { VO.pre.push(d); if (VO.pre.length > 4) VO.pre.shift(); VO.floor = VO.floor * .9 + m * .1; return; }
-        VO.chunks.push(d); VO.peak = Math.max(VO.peak, m);
-        document.documentElement.style.setProperty("--lvl", Math.min(1, m * 3).toFixed(2));
-        voiceLevel(m, d.length / VO.ctx.sampleRate);
+        let m = 0, q = 0; for (let k = 0; k < d.length; k++) { const v = Math.abs(d[k]); if (v > m) m = v; q += d[k] * d[k]; }
+        VO.chunks.push(d); VO.frames++; VO.peak = Math.max(VO.peak, m);
+        voiceLevel(m, Math.sqrt(q / d.length), d.length / ctx.sampleRate);
       };
-      VO.ctx.createMediaStreamSource(s).connect(node); node.connect(VO.ctx.destination); VO.node = node;
-      VO.micErr = "";
-    } catch (err) {
-      console.warn(err); VO.micErr = `Mic opened but couldn't be read (${err.name || "error"}: ${err.message || err})`;
-      voiceRefresh(); toast("🎙️ " + esc(VO.micErr));
-    }
-    voiceRefresh();
-  }).catch(err => {
-    console.warn(err);
-    VO.micErr = err.name === "NotAllowedError"
-      ? "Mic blocked. In Safari tap aA → Website Settings → Microphone → Allow. In the home-screen app: Settings → Apps → Safari → Microphone → Ask"
-      : `Mic error (${err.name || "error"}: ${err.message || err})`;
-    voiceRefresh(); toast("🎙️ " + esc(VO.micErr));
-  }).finally(() => { VO.asking = false; });
+      src.connect(node); node.connect(mute); mute.connect(ctx.destination);
+      VO.src = src; VO.node = node; VO.mute = mute;
+      // a second recording of the same mic, used if the live samples never arrive
+      try { VO.mr = new MediaRecorder(stream); VO.mr.ondataavailable = e => e.data && e.data.size && VO.blobs.push(e.data); VO.mr.start(); } catch (_) { VO.mr = null; }
+      VO.stage = "listen"; VO.t0 = Date.now(); VO.lvl = 0;
+      tone(990, 0, .07, "sine", .1);
+      VO.safety = setTimeout(() => voiceStop(), LISTEN_MS);
+      renderBuzz();
+    })
+    .catch(err => {
+      if (run !== VO.run) return;
+      console.warn(err);
+      VO.micErr = err.name === "NotAllowedError"
+        ? "Mic blocked. In Safari tap aA → Website Settings → Microphone → Allow."
+        : `Mic error (${err.name || "error"}: ${err.message || err})`;
+      voiceOff(); VO.stage = null; toast("🎙️ " + esc(VO.micErr));
+      if (S.mode === "buzz" && B.phase === "buzzed" && B.buzzed === i) runSayClock(SAY_MS);
+    });
+  return true;
 }
-function voiceClose() {
-  VO.rec = null; VO.stage = null;
-  if (VO.stream) { VO.stream.getTracks().forEach(tr => tr.stop()); VO.stream = null; }
-  if (VO.node) { VO.node.disconnect(); VO.node = null; }
-  VO.pre = [];
-  try { if (navigator.audioSession && !VO.on) navigator.audioSession.type = "playback"; } catch (_) {}
+// level drives the pulsing mic; speech = louder than the room, done = 0.8 s of quiet after speaking
+function voiceLevel(m, rms, dur) {
+  const t = Date.now() - VO.t0;
+  if (t < 250) { VO.floor = VO.floor ? (VO.floor + rms) / 2 : rms; return; }
+  const lvl = Math.min(1, rms * 9); VO.lvl = Math.max(lvl, VO.lvl * .7);
+  document.documentElement.style.setProperty("--lvl", VO.lvl.toFixed(2));
+  const loud = Math.max(.02, VO.floor * 3), soft = Math.max(.012, VO.floor * 1.8);
+  if (rms > loud) { VO.spoke++; VO.quiet = 0; }
+  else if (VO.spoke >= 3 && rms < soft) VO.quiet += dur;
+  else VO.quiet = 0;
+  if (VO.spoke >= 3 && VO.quiet >= .8 && t > 900) voiceStop();
 }
-// after the buzz the mic listens on its own and stops when the speaker goes quiet
-const LISTEN_MS = 5000, RETRY_MS = 4000;
-function voiceListen(i) {
-  if (!voiceReady()) return false;
-  if (!VO.stream) { voiceMic(); return false; }
-  if (S.mode !== "buzz" || B.phase !== "buzzed" || B.buzzed !== i || VO.stage === "listen" || VO.stage === "think") return false;
-  stopTimers(); VO.ctx.resume();
-  VO.chunks = VO.pre.slice(); VO.peak = 0; VO.spoke = 0; VO.quiet = 0; VO.rec = i; VO.stage = "listen"; VO.t0 = Date.now();
-  renderBuzz(); return true;
+// mic off: stop the tracks so the iPad's mic light goes out, and give the sound back to the game
+function voiceOff() {
+  clearTimeout(VO.safety);
+  const mr = VO.mr; VO.mr = null;
+  const done = mr && mr.state !== "inactive" ? new Promise(r => { mr.onstop = r; setTimeout(r, 600); try { mr.stop(); } catch (_) { r(); } }) : Promise.resolve();
+  if (VO.node) { VO.node.onaudioprocess = null; try { VO.src.disconnect(); VO.node.disconnect(); VO.mute.disconnect(); } catch (_) {} VO.node = VO.src = VO.mute = null; }
+  const st = VO.stream; VO.stream = null;
+  return done.then(() => {
+    if (st) st.getTracks().forEach(tr => tr.stop());
+    try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (_) {}
+    document.documentElement.style.setProperty("--lvl", 0);
+  });
 }
-// speech = louder than the room; done = 0.7 s of quiet after speaking, or the time limit
-function voiceLevel(m, dur) {
-  const t = Date.now() - VO.t0, loud = Math.max(.05, VO.floor * 2.5), soft = Math.max(.03, VO.floor * 1.5);
-  if (t > 300 && m > loud) { VO.spoke++; VO.quiet = 0; }
-  else if (VO.spoke >= 2 && m < soft) VO.quiet += dur;
-  else if (m >= soft) VO.quiet = 0;
-  if ((VO.spoke >= 2 && VO.quiet >= .7 && t > 1000) || t > LISTEN_MS) voiceStop();
-}
+// a team's turn ends early: host showed the answer, passed, or left the game
+function voiceAbort() { if (!VO.stage) return; VO.run++; VO.stage = null; VO.rec = null; voiceOff(); }
+function voiceClose() { voiceAbort(); }
 async function voiceStop() {
   if (VO.stage !== "listen") return;
-  const i = VO.rec; VO.stage = "think"; VO.rec = null;
-  document.documentElement.style.setProperty("--lvl", 0);
+  const i = VO.rec, run = VO.run; VO.stage = "think"; VO.rec = null;
   tone(620, 0, .06, "sine", .08); renderBuzz();
+  await voiceOff();
   const [no, en] = B.deck[B.idx], answer = B.showNo ? en : no, lang = B.showNo ? "english" : "norwegian";
-  let heard = "";
-  if (VO.spoke >= 2 && VO.peak > .02) {
-    try { heard = await voiceHear(VO.chunks, lang, voiceWords(answer, B.showNo ? 1 : 0)); } catch (err) { console.warn(err); }
-  }
+  let heard = "", audio = null;
+  try {
+    if (VO.frames > 4) audio = await voiceTo16k(VO.chunks, VO.rate);
+    else if (VO.blobs.length) {   // no live samples came through: decode the recording instead
+      const dec = await VO.ctx.decodeAudioData(await new Blob(VO.blobs).arrayBuffer());
+      audio = await voiceTo16k([dec.getChannelData(0)], dec.sampleRate);
+    }
+    if (audio && audio.length > 4000) heard = await voiceHear(audio, lang, voiceWords(answer, B.showNo ? 1 : 0));
+  } catch (err) { console.warn(err); }
+  if (run !== VO.run) return;
   VO.stage = null;
   if (S.mode !== "buzz" || B.phase !== "buzzed" || B.buzzed !== i) return renderPads();
   if (heard && voiceMatch(heard, answer)) {
@@ -4398,18 +4431,20 @@ async function voiceStop() {
   if (VO.tries >= 2) { toast(heard ? `Hørte «${esc(heard)}» · ${TEAMS[i].name} passes` : `${TEAMS[i].name} passes`); return passBuzz(); }
   VO.stage = "retry"; runSayClock(RETRY_MS);
 }
+async function voiceTo16k(chunks, rate) {
+  const len = chunks.reduce((n, c) => n + c.length, 0), all = new Float32Array(len);
+  let o = 0; for (const c of chunks) { all.set(c, o); o += c.length; }
+  const off = new OfflineAudioContext(1, Math.ceil(len * 16000 / rate), 16000);
+  const buf = off.createBuffer(1, len, rate); buf.copyToChannel(all, 0);
+  const src = off.createBufferSource(); src.buffer = buf; src.connect(off.destination); src.start();
+  return (await off.startRendering()).getChannelData(0);
+}
 // the expected answer first, then other answers from the list in the same language
 function voiceWords(answer, col) {
   const others = shuffle(WORDS.map(w => w[col]).filter(w => w !== answer)).slice(0, 20);
   return [answer, ...others].map(w => voiceAlts(w)[0]).filter(Boolean);
 }
-async function voiceHear(chunks, language, words) {
-  const len = chunks.reduce((n, c) => n + c.length, 0), all = new Float32Array(len);
-  let o = 0; for (const c of chunks) { all.set(c, o); o += c.length; }
-  const rate = VO.ctx.sampleRate, off = new OfflineAudioContext(1, Math.ceil(len * 16000 / rate), 16000);
-  const buf = off.createBuffer(1, len, rate); buf.copyToChannel(all, 0);
-  const src = off.createBufferSource(); src.buffer = buf; src.connect(off.destination); src.start();
-  const audio = (await off.startRendering()).getChannelData(0);
+async function voiceHear(audio, language, words) {
   const { model, tokenizer, processor } = VO.asr;
   try {
     const id = tok => tokenizer.convert_tokens_to_ids(tok);
