@@ -73,11 +73,11 @@ th{color:var(--muted);font-weight:500}
     <div class="seg" id="lang">
       <button data-lang="norwegian" aria-pressed="true">Norsk</button>
       <button data-lang="english" aria-pressed="false">English</button>
-      <button data-lang="" aria-pressed="false">Auto</button>
     </div>
     <label for="target" style="margin-top:12px">Target word</label>
     <input id="target" type="text" value="kaffe" autocomplete="off" autocapitalize="off" spellcheck="false">
     <div class="chips" id="chips"></div>
+    <p class="muted" style="margin:10px 0 0">The model is told to expect these words, like the word list in the game.</p>
   </section>
 
   <section class="card">
@@ -190,7 +190,7 @@ function idle() {
 // --- microphone -----------------------------------------------------------------
 // Asked for on a plain tap (Turn on microphone, or Load model) so Safari shows its prompt.
 // The stream then stays open, and a short pre-roll keeps the first sound of a word.
-let ctx, stream, chunks = [], preroll = [], recording = false, held = false, busy = false, startedAt = 0, micAsk = null;
+let ctx, stream, chunks = [], preroll = [], peak = 0, recording = false, held = false, busy = false, startedAt = 0, micAsk = null;
 
 function enableMic() {
   if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -207,6 +207,7 @@ function enableMic() {
           chunks.push(d);
           let m = 0;
           for (let i = 0; i < d.length; i++) m = Math.max(m, Math.abs(d[i]));
+          peak = Math.max(peak, m);
           talkBtn.style.setProperty("--lvl", Math.min(1, m * 3).toFixed(2));
         } else {
           preroll.push(d);
@@ -258,6 +259,7 @@ function start() {
   held = true;
   ctx.resume();
   chunks = preroll.slice();
+  peak = 0;
   recording = true;
   startedAt = performance.now();
   beep(880);
@@ -283,6 +285,11 @@ async function stop() {
     setTimeout(() => { busy = false; idle(); }, 1500);
     return;
   }
+  if (peak < 0.02) {
+    setTalk("short", "Didn't hear anything", "Speak a bit louder, closer to the iPad");
+    setTimeout(() => { busy = false; idle(); }, 1500);
+    return;
+  }
   const len = chunks.reduce((n, c) => n + c.length, 0);
   const all = new Float32Array(len);
   let o = 0;
@@ -292,11 +299,10 @@ async function stop() {
   try {
     const audio = await to16k(all, ctx.sampleRate);
     const t0 = performance.now();
-    const out = await asr(audio, lang ? { language: lang, task: "transcribe" } : { task: "transcribe" });
+    const heard = await recognise(audio, lang, wordList(target));
     const think = (performance.now() - t0) / 1000;
-    const heard = (out.text || "").trim();
     const score = matchScore(heard, target);
-    ok = score >= 0.75;
+    ok = score >= 0.8;
     setTalk(ok ? "ok" : "bad", ok ? "Riktig!" : "Not a match", `Heard “${heard || "…"}”`);
     $("result").innerHTML = `${ok ? '<span class="ok">✓ Riktig</span>' : '<span class="bad">✗ Not a match</span>'} &nbsp;“${esc(heard) || "…"}”`;
     $("detail").textContent = `Match ${(score * 100).toFixed(0)}% · you talked ${talk.toFixed(1)} s · recognised in ${think.toFixed(2)} s`;
@@ -323,6 +329,35 @@ window.addEventListener("mouseup", () => stop());
 talkBtn.addEventListener("contextmenu", (e) => e.preventDefault());
 talkBtn.addEventListener("selectstart", (e) => e.preventDefault());
 
+// --- recognition ----------------------------------------------------------------
+// Whisper on its own turns a learner's "kaffe" into café or coffee. Two things fix most of that:
+// the language token is forced, and the game's word list goes in as a prompt (Whisper's
+// "previous text"), which pulls the spelling toward the words we expect.
+function wordList(target) {
+  const words = CHIPS.filter(([, l]) => l === lang).map(([w]) => w);
+  if (target && !words.includes(target)) words.unshift(target);
+  return words;
+}
+async function recognise(audio, language, words) {
+  try {
+    const { model, tokenizer, processor } = asr;
+    const id = (tok) => tokenizer.convert_tokens_to_ids(tok);
+    const code = language === "english" ? "en" : "no";
+    const prompt = tokenizer.encode(" " + words.join(", ") + ".", { add_special_tokens: false }).slice(-100);
+    const init = [id("<|startofprev|>"), ...prompt, id("<|startoftranscript|>"), id(`<|${code}|>`), id("<|transcribe|>"), id("<|notimestamps|>")];
+    if (init.some((x) => x == null)) throw new Error("model has no prompt tokens");
+    const inputs = await processor(audio);
+    const out = await model.generate({ ...inputs, decoder_input_ids: init, max_new_tokens: 24 });
+    const ids = out.tolist()[0].map(Number).slice(init.length);
+    return tokenizer.decode(ids, { skip_special_tokens: true }).trim();
+  } catch (err) {
+    // Fall back to plain transcription in the chosen language.
+    console.warn("prompted recognition failed, using plain transcription", err);
+    const out = await asr(audio, { language, task: "transcribe" });
+    return (out.text || "").trim();
+  }
+}
+
 // --- matching -------------------------------------------------------------------
 // Close enough counts: compare the target with every same-length run of heard words.
 function norm(s) {
@@ -342,12 +377,20 @@ function lev(a, b) {
   return d[b.length];
 }
 function sim(a, b) { return a || b ? 1 - lev(a, b) / Math.max(a.length, b.length) : 1; }
+// Rough sound-alike spelling, so café / cafe / kafe / kaffe all compare as "kafe".
+function sound(s) {
+  return s.replace(/[éèêë]/g, "e").replace(/[áàâ]/g, "a").replace(/[óòô]/g, "o").replace(/[üû]/g, "u")
+    .replace(/ph/g, "f").replace(/ch/g, "k").replace(/c(?=[eiy])/g, "s").replace(/[cq]/g, "k")
+    .replace(/w/g, "v").replace(/z/g, "s").replace(/(.)\1+/g, "$1");
+}
 function matchScore(heard, target) {
   const h = norm(heard).split(" ").filter(Boolean), t = norm(target);
   if (!t) return 0;
   const n = t.split(" ").length;
-  let best = sim(h.join(" "), t);
-  for (let i = 0; i + n <= h.length; i++) best = Math.max(best, sim(h.slice(i, i + n).join(" "), t));
+  const runs = [h.join(" ")];
+  for (let i = 0; i + n <= h.length; i++) runs.push(h.slice(i, i + n).join(" "));
+  let best = 0;
+  for (const r of runs) best = Math.max(best, sim(r, t), sim(sound(r), sound(t)));
   return best;
 }
 function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
