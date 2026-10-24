@@ -4193,8 +4193,9 @@ addEventListener("hashchange", checkLink);
 setTimeout(checkLink, 1900);
 
 // ---------- what's new: pops up once after a new release (bump APP_VERSION and add a note each release) ----------
-const APP_VERSION = 39;
+const APP_VERSION = 40;
 const NEWS = [
+  { v: 40, title: "Mikrofon", items: [["🎙️", "If <b>Stemme</b> can't open the microphone, it now tells you exactly why, and it tries a simpler mic setting first."]] },
   { v: 39, title: "Si det høyt", items: [
     ["🎙️", "<b>Voice answers in Først!</b> Turn on <b>Stemme</b> in Lyd. Then hold your team's bar, say the word, and let go. Kaffebar checks it for you."],
     ["📶", "It runs on this iPad. The first time it downloads about 80 MB, then it works without internet."],
@@ -4235,13 +4236,14 @@ setTimeout(() => showNews(), 1900);
 // Whisper base runs in the browser (WebGPU, or the CPU when there is none). Two things make it
 // reliable on single learner words: the language token is forced, and the round's word list is
 // passed as Whisper's "previous text", so the spelling leans toward the words we expect.
-const VO = { on: load("kaffebar-voice", false), asr: null, loading: false, pct: 0, err: "", rec: null, think: null,
+const VO = { on: load("kaffebar-voice", false), asr: null, loading: false, pct: 0, err: "", micErr: "", rec: null, think: null,
   ctx: null, stream: null, chunks: [], pre: [], peak: 0, t0: 0, left: 0 };
 const VOICE_MODEL = "onnx-community/whisper-base";
 const voiceReady = () => VO.on && !!VO.asr;
 function voiceCard() {
-  const state = VO.loading ? `Laster ${Math.round(VO.pct)}%` : VO.on && VO.asr ? "På" : VO.on && VO.err ? "Feil" : VO.on ? "Venter" : "Av";
-  const small = VO.err && VO.on ? esc(VO.err)
+  const bad = VO.micErr || VO.err;
+  const state = VO.loading ? `Laster ${Math.round(VO.pct)}%` : VO.on && bad ? "Feil" : VO.on && VO.asr ? "På" : VO.on ? "Venter" : "Av";
+  const small = bad && VO.on ? esc(bad)
     : VO.loading ? "Downloading the speech model. Only the first time, about 80 MB."
     : "Hold your bar and say the answer in Først! Runs on this iPad.";
   const mic = '<svg class="ico" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21M8.5 21h7"/></svg>';
@@ -4249,7 +4251,7 @@ function voiceCard() {
 }
 function voiceRefresh() { if (P.stack.at(-1) === "audio") renderPanel(); }
 function voiceToggle() {
-  VO.on = !VO.on; store("kaffebar-voice", VO.on); sfx.pick();
+  VO.on = !VO.on; store("kaffebar-voice", VO.on); sfx.pick(); VO.micErr = "";
   if (VO.on) { voiceMic(); voiceLoad(); } else voiceClose();
   voiceRefresh();
 }
@@ -4283,22 +4285,39 @@ function voiceMic() {
   try {
     VO.ctx = VO.ctx || new (window.AudioContext || window.webkitAudioContext)(); VO.ctx.resume();
   } catch (_) { return; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    VO.micErr = "This browser can't use the microphone here. Open Kaffebar in Safari.";
+    voiceRefresh(); return toast("🎙️ " + VO.micErr);
+  }
   VO.asking = true;
-  navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }).then(s => {
+  // the plain request is the fallback: some iPad setups reject the processing options
+  const ask = () => navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+    .catch(err => err.name === "NotAllowedError" || err.name === "SecurityError" ? Promise.reject(err) : navigator.mediaDevices.getUserMedia({ audio: true }));
+  ask().then(s => {
     VO.stream = s;
-    const node = VO.ctx.createScriptProcessor(4096, 1, 1);
-    node.onaudioprocess = e => {
-      const d = new Float32Array(e.inputBuffer.getChannelData(0));
-      if (VO.rec == null) { VO.pre.push(d); if (VO.pre.length > 4) VO.pre.shift(); return; }
-      VO.chunks.push(d);
-      let m = 0; for (let k = 0; k < d.length; k++) m = Math.max(m, Math.abs(d[k]));
-      VO.peak = Math.max(VO.peak, m);
-      const p = pads[activeTeams()[VO.rec]]; if (p) p.style.setProperty("--lvl", Math.min(1, m * 3).toFixed(2));
-    };
-    VO.ctx.createMediaStreamSource(s).connect(node); node.connect(VO.ctx.destination); VO.node = node;
+    try {
+      const node = VO.ctx.createScriptProcessor(4096, 1, 1);
+      node.onaudioprocess = e => {
+        const d = new Float32Array(e.inputBuffer.getChannelData(0));
+        if (VO.rec == null) { VO.pre.push(d); if (VO.pre.length > 4) VO.pre.shift(); return; }
+        VO.chunks.push(d);
+        let m = 0; for (let k = 0; k < d.length; k++) m = Math.max(m, Math.abs(d[k]));
+        VO.peak = Math.max(VO.peak, m);
+        const p = pads[activeTeams()[VO.rec]]; if (p) p.style.setProperty("--lvl", Math.min(1, m * 3).toFixed(2));
+      };
+      VO.ctx.createMediaStreamSource(s).connect(node); node.connect(VO.ctx.destination); VO.node = node;
+      VO.micErr = "";
+    } catch (err) {
+      console.warn(err); VO.micErr = `Mic opened but couldn't be read (${err.name || "error"}: ${err.message || err})`;
+      voiceRefresh(); toast("🎙️ " + esc(VO.micErr));
+    }
+    voiceRefresh();
   }).catch(err => {
-    VO.err = err.name === "NotAllowedError" ? "Microphone blocked: in Safari tap aA → Website Settings → Microphone → Allow" : "No microphone";
-    voiceRefresh(); toast("🎙️ " + VO.err);
+    console.warn(err);
+    VO.micErr = err.name === "NotAllowedError"
+      ? "Mic blocked. In Safari tap aA → Website Settings → Microphone → Allow. In the home-screen app: Settings → Apps → Safari → Microphone → Ask"
+      : `Mic error (${err.name || "error"}: ${err.message || err})`;
+    voiceRefresh(); toast("🎙️ " + esc(VO.micErr));
   }).finally(() => { VO.asking = false; });
 }
 function voiceClose() {
