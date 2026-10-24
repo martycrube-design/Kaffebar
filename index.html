@@ -105,6 +105,14 @@ input, textarea { -webkit-user-select: text; user-select: text; font: inherit; }
 .pad.live { animation: glow 1s ease-in-out infinite alternate; }
 .pad.live:active { transform: scale(.97); }
 .pad.buzzed { background: var(--white); box-shadow: inset 0 0 0 7px var(--c), 0 0 50px var(--c); }
+/* voice answers: the buzzed team holds its bar and talks */
+body.voice-live .pad { touch-action: none; -webkit-touch-callout: none; }
+.pad.rec { background: #ff4a3d; box-shadow: inset 0 0 0 7px #fff, 0 0 calc(30px + var(--lvl, 0) * 60px) #ff4a3d; }
+.pad.buzzed.rec .pad-name, .pad.buzzed.rec .pad-hint { color: var(--white); }
+.pad.buzzed.rec .pad-hint { background: rgba(0,0,0,.35); }
+.pad.buzzed.rec .pad-score { background: rgba(255,255,255,.45); }
+body.voice-busy .say-bar { visibility: hidden; }
+.pad.think .pad-hint { background: var(--muted); }
 .pad.buzzed .pad-name { color: color-mix(in srgb, var(--c) 70%, var(--ink)); }
 .pad.buzzed .pad-score { background: var(--c); }
 .pad.out, .pad.idle { opacity: .4; filter: saturate(.5); }
@@ -1635,6 +1643,8 @@ function renderPads() {
   const sides = activeTeams();
   document.body.classList.toggle("lanes", S.mode === "quiz");
   document.body.classList.toggle("panel-open", P.stack.length > 0);
+  document.body.classList.toggle("voice-live", S.mode === "buzz" && voiceReady());
+  document.body.classList.toggle("voice-busy", VO.rec != null || VO.think != null);
   // a name being typed would be wiped by a redraw
   if (document.activeElement && document.activeElement.classList.contains("pad-name")) return updateCorners();
   for (const side of ["top", "left", "right", "bottom"]) {
@@ -1644,7 +1654,7 @@ function renderPads() {
     p.dataset.team = i;
     p.style.visibility = S.mode === "bomb" && X.phase === "boom" && X.loser === i && Date.now() < X.shatterUntil ? "hidden" : "";
     p.style.setProperty("--c", TEAMS[i].color);
-    p.classList.remove("live", "buzzed", "out", "turn", "idle", "edit", "res-ok", "res-bad", "bomb-out", "bomb-win");
+    p.classList.remove("live", "buzzed", "out", "turn", "idle", "edit", "res-ok", "res-bad", "bomb-out", "bomb-win", "rec", "think");
     if (S.mode === "bomb" && X.out.includes(i)) p.classList.add("bomb-out");
     if (S.mode === "bomb" && X.phase === "won" && X.winner === i) p.classList.add("bomb-win");
     if (S.mode === "quiz" && Q.phase === "reveal" && !Q.duel && Q.res && i in Q.res && !Object.values(Q.res).every(Boolean)) p.classList.add(Q.res[i] ? "res-ok" : "res-bad");
@@ -1661,7 +1671,9 @@ function renderPads() {
     }
     let hint = "", turnOf = null, extra = "";
     if (S.mode === "buzz") {
-      if (B.buzzed === i) { p.classList.add("buzzed"); hint = B.phase === "check" ? "Riktig?" : `Si det! ${sayLeft()}`; }
+      if (B.buzzed === i && VO.rec === i) { p.classList.add("buzzed", "rec"); hint = "Snakk nå!"; }
+      else if (B.buzzed === i && VO.think === i) { p.classList.add("buzzed", "think"); hint = "Tenker…"; }
+      else if (B.buzzed === i) { p.classList.add("buzzed"); hint = B.phase === "check" ? "Riktig?" : voiceReady() ? `Hold og si det! ${sayLeft()}` : `Si det! ${sayLeft()}`; }
       else if (B.out.has(i)) { p.classList.add("out"); hint = "Vent"; }
       else if (B.phase === "open") { p.classList.add("live"); hint = "Trykk!"; }
     }
@@ -1726,7 +1738,7 @@ Object.values(pads).forEach(p => p.addEventListener("pointerdown", e => {
   }
   e.preventDefault();
   if (P.stack.length) return;
-  if (S.mode === "buzz") buzz(+p.dataset.team);
+  if (S.mode === "buzz") { buzz(+p.dataset.team); voicePress(+p.dataset.team); }
   if (S.mode === "bomb") passBomb(+p.dataset.team);
   const opt = e.target.closest("[data-opt]");
   if (S.mode === "quiz" && opt) pickQuiz(+p.dataset.team, +opt.dataset.opt);
@@ -1862,6 +1874,7 @@ const MODES = [
   ["bomb", "Hot potato", "Bomben", "Say the word, tap your side to pass the dynamite before BOOM.", "About 5 min a round · all", "var(--t4)"],
 ];
 function renderMenu() {
+  voiceClose();
   stopTimers(); paused = null; setMood(null); Q.duel = null; S.mode = "menu"; document.querySelectorAll(".slot-ask").forEach(x => x.remove()); center.classList.remove("sided"); renderPads();
   center.innerHTML = `<div class="modes">${MODES.map(([k, en, no, p, time, c]) => `
     <button class="mode" data-go="${k}" style="--mc:${c}">
@@ -1983,10 +1996,11 @@ const PANELS = {
   audio: () => ({
     title: "Lyd", note: "If you hear nothing, check the iPad volume",
     body: `<div class="tip"><span>${KIT_ICO}Tap the team bars to play a little drum kit: bass, snare, hi-hat and melody</span></div>
-    <div class="pgrid" style="--cols:3">
+    <div class="pgrid" style="--cols:4">
       <button class="scard${SND.music ? " on" : ""}" data-p="music">${ICO.note.replace("<svg", '<svg class="ico"')}<span class="badge state${SND.music ? " yes" : ""}">${SND.music ? "På" : "Av"}</span><b>Musikk</b><small>Background music. It speeds up when time is running out.</small></button>
       <button class="scard${SND.sfx ? " on" : ""}" data-p="sfx">${ICO.bell.replace("<svg", '<svg class="ico"')}<span class="badge state${SND.sfx ? " yes" : ""}">${SND.sfx ? "På" : "Av"}</span><b>Lydeffekter</b><small>Buzzers, dice, ticking fuse and the winner's fanfare.</small></button>
       <button class="scard" data-p="test">${ICO.play.replace("<svg", '<svg class="ico"')}<b>Test lyd</b><small>Plays a short fanfare so you can check the volume.</small></button>
+      ${voiceCard()}
     </div>`,
   }),
   settings: () => {
@@ -2142,6 +2156,7 @@ panelEl.addEventListener("click", e => {
       renderPads(); return renderPanel();
     }
     case "music": case "sfx": toggleSound(a); return renderPanel();
+    case "voice": return voiceToggle();
     case "test": unlockAudio(); if (SND.music) startMusic(); return sfx.fanfare();
     case "dircycle": { const k = DIRS.findIndex(d => d[0] === S.dir); S.dir = DIRS[(k + 1) % DIRS.length][0]; save(); sfx.flip(); return renderPanel(); }
     case "reset":
@@ -2176,7 +2191,7 @@ panelEl.addEventListener("click", e => {
 
 // ---------- Først! (buzzer race) ----------
 const B = { deck: [], idx: -1, phase: "open", buzzed: null, out: new Set(), showNo: false, armedAt: 0 };
-function startBuzz() { S.mode = "buzz"; B.deck = shuffle(WORDS); B.idx = -1; nextBuzz(); }
+function startBuzz() { if (voiceReady()) voiceMic(); S.mode = "buzz"; B.deck = shuffle(WORDS); B.idx = -1; nextBuzz(); }
 function nextBuzz() {
   B.idx = (B.idx + 1) % B.deck.length;
   if (B.idx === 0 && B.deck.length) B.deck = shuffle(WORDS);
@@ -2216,7 +2231,7 @@ function renderBuzz(enter) {
     ${B.phase === "reveal" ? `<span class="say">Alle sammen · everyone say it together</span>` : ""}
     ${B.phase === "buzzed" ? `<span class="say-bar" style="--ms:${B.sayLeft}ms;--f:${(B.sayLeft / SAY_MS).toFixed(3)}"><i></i></span>` : ""}`;
   let host = "";
-  if (B.phase === "open") host = `<span class="status">First to tap their side!</span><button class="btn" data-act="reveal">Nobody? Show it</button>`;
+  if (B.phase === "open") host = `<span class="status">${voiceReady() ? "Hold your side and say it!" : "First to tap their side!"}</span><button class="btn" data-act="reveal">Nobody? Show it</button>`;
   if (B.phase === "buzzed") host = `<button class="btn primary" data-act="check">Show answer</button><button class="btn" data-act="pass">Pass to others</button>`;
   if (B.phase === "check") host = `<span class="status">Did they say it?</span><button class="btn ok" data-act="right">Riktig! +2</button><button class="btn warm" data-act="close">Nesten! +1</button><button class="btn" data-act="nope">Neste gang</button>`;
   if (B.phase === "reveal") host = `<button class="btn primary" data-act="next">Neste kort →</button>`;
@@ -4178,8 +4193,12 @@ addEventListener("hashchange", checkLink);
 setTimeout(checkLink, 1900);
 
 // ---------- what's new: pops up once after a new release (bump APP_VERSION and add a note each release) ----------
-const APP_VERSION = 38;
+const APP_VERSION = 39;
 const NEWS = [
+  { v: 39, title: "Si det høyt", items: [
+    ["🎙️", "<b>Voice answers in Først!</b> Turn on <b>Stemme</b> in Lyd. Then hold your team's bar, say the word, and let go. Kaffebar checks it for you."],
+    ["📶", "It runs on this iPad. The first time it downloads about 80 MB, then it works without internet."],
+    ["👆", "Only the team that buzzed can answer, and the host buttons still work if it gets one wrong."]] },
   { v: 38, title: "Faste plasser", items: [["🪑", "<b>Teams keep their seats.</b> When a team leaves, everyone else stays where they are. A team that joins takes the empty side, and its bar slides in on every edge."]] },
   { v: 36, title: "Hva er nytt", items: [["📰", "<b>What's new</b> pops up like this after each update. Tap X to close it."]] },
   { v: 35, title: "Del ordlister", items: [
@@ -4211,6 +4230,166 @@ function showNews(force) {
   document.body.appendChild(el);
 }
 setTimeout(() => showNews(), 1900);
+
+// ---------- Stemme: spoken answers, recognised on this iPad ----------
+// Whisper base runs in the browser (WebGPU, or the CPU when there is none). Two things make it
+// reliable on single learner words: the language token is forced, and the round's word list is
+// passed as Whisper's "previous text", so the spelling leans toward the words we expect.
+const VO = { on: load("kaffebar-voice", false), asr: null, loading: false, pct: 0, err: "", rec: null, think: null,
+  ctx: null, stream: null, chunks: [], pre: [], peak: 0, t0: 0, left: 0 };
+const VOICE_MODEL = "onnx-community/whisper-base";
+const voiceReady = () => VO.on && !!VO.asr;
+function voiceCard() {
+  const state = VO.loading ? `Laster ${Math.round(VO.pct)}%` : VO.on && VO.asr ? "På" : VO.on && VO.err ? "Feil" : VO.on ? "Venter" : "Av";
+  const small = VO.err && VO.on ? esc(VO.err)
+    : VO.loading ? "Downloading the speech model. Only the first time, about 80 MB."
+    : "Hold your bar and say the answer in Først! Runs on this iPad.";
+  const mic = '<svg class="ico" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21M8.5 21h7"/></svg>';
+  return `<button class="scard${VO.on ? " on" : ""}" data-p="voice">${mic}<span class="badge state${voiceReady() ? " yes" : ""}">${state}</span><b>Stemme</b><small>${small}</small></button>`;
+}
+function voiceRefresh() { if (P.stack.at(-1) === "audio") renderPanel(); }
+function voiceToggle() {
+  VO.on = !VO.on; store("kaffebar-voice", VO.on); sfx.pick();
+  if (VO.on) { voiceMic(); voiceLoad(); } else voiceClose();
+  voiceRefresh();
+}
+async function voiceLoad() {
+  if (VO.asr || VO.loading) return;
+  VO.loading = true; VO.err = ""; VO.pct = 0; voiceRefresh();
+  try {
+    const { pipeline } = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1");
+    const files = new Map();
+    const progress_callback = p => {
+      if (p.status !== "progress" || !p.total) return;
+      files.set(p.file, [p.loaded, p.total]);
+      let l = 0, n = 0; for (const [a, b] of files.values()) { l += a; n += b; }
+      const pct = 100 * l / n; if (pct - VO.pct >= 3 || pct >= 100) { VO.pct = pct; voiceRefresh(); }
+    };
+    const tries = [...(navigator.gpu ? [{ device: "webgpu", dtype: { encoder_model: "fp32", decoder_model_merged: "q4" } }] : []), { device: "wasm", dtype: "q8" }];
+    for (const t of tries) {
+      try {
+        const asr = await pipeline("automatic-speech-recognition", VOICE_MODEL, { ...t, progress_callback });
+        await asr(new Float32Array(16000), { language: "norwegian", task: "transcribe" });
+        VO.asr = asr; break;
+      } catch (err) { console.warn("voice model failed on", t.device, err); VO.err = "Couldn't load the speech model"; }
+    }
+    if (VO.asr) { VO.err = ""; if (VO.on) toast("🎙️ Stemme klar!"); }
+  } catch (err) { console.warn(err); VO.err = "No internet to download the speech model"; }
+  VO.loading = false; voiceRefresh(); if (S.mode === "buzz") renderBuzz();
+}
+// Opened on a tap so Safari shows its prompt; kept open while a game runs, with a short pre-roll.
+function voiceMic() {
+  if (VO.stream || VO.asking) return;
+  try {
+    VO.ctx = VO.ctx || new (window.AudioContext || window.webkitAudioContext)(); VO.ctx.resume();
+  } catch (_) { return; }
+  VO.asking = true;
+  navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }).then(s => {
+    VO.stream = s;
+    const node = VO.ctx.createScriptProcessor(4096, 1, 1);
+    node.onaudioprocess = e => {
+      const d = new Float32Array(e.inputBuffer.getChannelData(0));
+      if (VO.rec == null) { VO.pre.push(d); if (VO.pre.length > 4) VO.pre.shift(); return; }
+      VO.chunks.push(d);
+      let m = 0; for (let k = 0; k < d.length; k++) m = Math.max(m, Math.abs(d[k]));
+      VO.peak = Math.max(VO.peak, m);
+      const p = pads[activeTeams()[VO.rec]]; if (p) p.style.setProperty("--lvl", Math.min(1, m * 3).toFixed(2));
+    };
+    VO.ctx.createMediaStreamSource(s).connect(node); node.connect(VO.ctx.destination); VO.node = node;
+  }).catch(err => {
+    VO.err = err.name === "NotAllowedError" ? "Microphone blocked: in Safari tap aA → Website Settings → Microphone → Allow" : "No microphone";
+    voiceRefresh(); toast("🎙️ " + VO.err);
+  }).finally(() => { VO.asking = false; });
+}
+function voiceClose() {
+  VO.rec = null;
+  if (VO.stream) { VO.stream.getTracks().forEach(tr => tr.stop()); VO.stream = null; }
+  if (VO.node) { VO.node.disconnect(); VO.node = null; }
+  VO.pre = [];
+}
+// a team's bar: press = buzz (handled by the game) and, with voice on, start listening
+function voicePress(i) {
+  if (!voiceReady()) return;
+  if (!VO.stream) { voiceMic(); return; }
+  if (S.mode !== "buzz" || B.phase !== "buzzed" || B.buzzed !== i || VO.rec != null || VO.think != null) return;
+  VO.left = Math.max(1500, B.sayEnd - Date.now()); stopTimers();
+  VO.ctx.resume(); VO.chunks = VO.pre.slice(); VO.peak = 0; VO.rec = i; VO.t0 = Date.now();
+  tone(880, 0, .06, "sine", .08); renderPads();
+}
+async function voiceRelease() {
+  if (VO.rec == null) return;
+  const i = VO.rec;
+  await new Promise(r => setTimeout(r, 250));   // keep the end of the word
+  VO.rec = null; VO.think = i; tone(620, 0, .06, "sine", .08); renderPads();
+  const held = Date.now() - VO.t0, [no, en] = B.deck[B.idx], answer = B.showNo ? en : no, lang = B.showNo ? "english" : "norwegian";
+  let heard = "";
+  if (held > 350 && VO.peak > .02) {
+    try { heard = await voiceHear(VO.chunks, lang, voiceWords(answer, B.showNo ? 1 : 0)); } catch (err) { console.warn(err); }
+  }
+  VO.think = null;
+  if (S.mode !== "buzz" || B.phase !== "buzzed" || B.buzzed !== i) return renderPads();
+  if (heard && voiceMatch(heard, answer)) {
+    addPoints(i, 2); sfx.yay(); B.phase = "reveal"; renderBuzz();
+    return celebrate(i, 2, "RIKTIG!", B.deck[B.idx][B.showNo ? 1 : 0]);
+  }
+  sfx.miss(); toast(heard ? `Hørte «${esc(heard)}» · prøv igjen` : held <= 350 ? "Hold baren mens du snakker" : "Hørte ingenting · prøv igjen");
+  runSayClock(VO.left);
+}
+addEventListener("pointerup", () => voiceRelease());
+addEventListener("pointercancel", () => voiceRelease());
+// the expected answer first, then other answers from the list in the same language
+function voiceWords(answer, col) {
+  const others = shuffle(WORDS.map(w => w[col]).filter(w => w !== answer)).slice(0, 20);
+  return [answer, ...others].map(w => voiceAlts(w)[0]).filter(Boolean);
+}
+async function voiceHear(chunks, language, words) {
+  const len = chunks.reduce((n, c) => n + c.length, 0), all = new Float32Array(len);
+  let o = 0; for (const c of chunks) { all.set(c, o); o += c.length; }
+  const rate = VO.ctx.sampleRate, off = new OfflineAudioContext(1, Math.ceil(len * 16000 / rate), 16000);
+  const buf = off.createBuffer(1, len, rate); buf.copyToChannel(all, 0);
+  const src = off.createBufferSource(); src.buffer = buf; src.connect(off.destination); src.start();
+  const audio = (await off.startRendering()).getChannelData(0);
+  const { model, tokenizer, processor } = VO.asr;
+  try {
+    const id = tok => tokenizer.convert_tokens_to_ids(tok);
+    const prompt = tokenizer.encode(" " + words.join(", ") + ".", { add_special_tokens: false }).slice(-120);
+    const init = [id("<|startofprev|>"), ...prompt, id("<|startoftranscript|>"), id(language === "english" ? "<|en|>" : "<|no|>"), id("<|transcribe|>"), id("<|notimestamps|>")];
+    if (init.some(x => x == null)) throw new Error("no prompt tokens");
+    const out = await model.generate({ ...(await processor(audio)), decoder_input_ids: init, max_new_tokens: 24 });
+    return tokenizer.decode(out.tolist()[0].map(Number).slice(init.length), { skip_special_tokens: true }).trim();
+  } catch (err) {
+    console.warn("prompted recognition failed, using plain transcription", err);
+    return ((await VO.asr(audio, { language, task: "transcribe" })).text || "").trim();
+  }
+}
+// "en kaffe (m) / kaffen" → ["kaffe", "kaffen"]: alternatives, without notes or articles
+function voiceAlts(w) {
+  return String(w).replace(/\([^)]*\)|\[[^\]]*\]/g, " ").split(/[\/,;]| eller | or /)
+    .map(x => vNorm(x).replace(/^(en|ei|et|å|a|an|the|to) /, "")).filter(Boolean);
+}
+function vNorm(s) { return String(s).toLowerCase().normalize("NFC").replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim(); }
+function vSound(s) {
+  return s.replace(/[éèêë]/g, "e").replace(/[áàâ]/g, "a").replace(/[óòô]/g, "o").replace(/[üû]/g, "u")
+    .replace(/ph/g, "f").replace(/ch/g, "k").replace(/c(?=[eiy])/g, "s").replace(/[cq]/g, "k")
+    .replace(/w/g, "v").replace(/z/g, "s").replace(/(.)\1+/g, "$1");
+}
+function vLev(a, b) {
+  const d = Array.from({ length: b.length + 1 }, (_, k) => k);
+  for (let x = 1; x <= a.length; x++) { let prev = d[0]; d[0] = x;
+    for (let y = 1; y <= b.length; y++) { const tmp = d[y]; d[y] = Math.min(d[y] + 1, d[y - 1] + 1, prev + (a[x - 1] === b[y - 1] ? 0 : 1)); prev = tmp; } }
+  return d[b.length];
+}
+const vSim = (a, b) => a || b ? 1 - vLev(a, b) / Math.max(a.length, b.length) : 1;
+// close enough counts: any alternative against any same-length run of heard words, as spelled or as it sounds
+function voiceMatch(heard, answer) {
+  const h = vNorm(heard).split(" ").filter(Boolean);
+  return voiceAlts(answer).some(t => {
+    const n = t.split(" ").length, runs = [h.join(" ")];
+    for (let k = 0; k + n <= h.length; k++) runs.push(h.slice(k, k + n).join(" "));
+    return runs.some(r => vSim(r, t) >= .8 || vSim(vSound(r), vSound(t)) >= .8);
+  });
+}
+if (VO.on) voiceLoad();
 
 renderMenu();
 setTimeout(() => document.getElementById("splash")?.remove(), 1800);
