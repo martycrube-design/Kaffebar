@@ -1289,7 +1289,8 @@ function silentWav() {
   return "data:audio/wav;base64," + btoa(bin);
 }
 function unlockAudio() {
-  try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (e) {}
+  // "playback" keeps sound on with the silent switch, but blocks the microphone, so Stemme needs play-and-record
+  try { if (navigator.audioSession) navigator.audioSession.type = (() => { try { return VO.on; } catch (_) { return false; } })() ? "play-and-record" : "playback"; } catch (e) {}
   if (!silentEl) {
     try { silentEl = new Audio(silentWav()); silentEl.loop = true; silentEl.setAttribute("playsinline", ""); silentEl.setAttribute("webkit-playsinline", ""); } catch (e) {}
   }
@@ -1874,7 +1875,7 @@ const MODES = [
   ["bomb", "Hot potato", "Bomben", "Say the word, tap your side to pass the dynamite before BOOM.", "About 5 min a round · all", "var(--t4)"],
 ];
 function renderMenu() {
-  voiceClose();
+  voiceClose(); setTimeout(() => typeof maybeReload === "function" && maybeReload(), 0);
   stopTimers(); paused = null; setMood(null); Q.duel = null; S.mode = "menu"; document.querySelectorAll(".slot-ask").forEach(x => x.remove()); center.classList.remove("sided"); renderPads();
   center.innerHTML = `<div class="modes">${MODES.map(([k, en, no, p, time, c]) => `
     <button class="mode" data-go="${k}" style="--mc:${c}">
@@ -4193,8 +4194,9 @@ addEventListener("hashchange", checkLink);
 setTimeout(checkLink, 1900);
 
 // ---------- what's new: pops up once after a new release (bump APP_VERSION and add a note each release) ----------
-const APP_VERSION = 40;
+const APP_VERSION = 41;
 const NEWS = [
+  { v: 41, title: "Mikrofonen virker", items: [["🎙️", "<b>Stemme</b> can now open the microphone. The game's sound setting was blocking it."], ["🔄", "Kaffebar checks for updates by itself and reloads on the menu when there's a new version."]] },
   { v: 40, title: "Mikrofon", items: [["🎙️", "If <b>Stemme</b> can't open the microphone, it now tells you exactly why, and it tries a simpler mic setting first."]] },
   { v: 39, title: "Si det høyt", items: [
     ["🎙️", "<b>Voice answers in Først!</b> Turn on <b>Stemme</b> in Lyd. Then hold your team's bar, say the word, and let go. Kaffebar checks it for you."],
@@ -4289,6 +4291,7 @@ function voiceMic() {
     VO.micErr = "This browser can't use the microphone here. Open Kaffebar in Safari.";
     voiceRefresh(); return toast("🎙️ " + VO.micErr);
   }
+  try { if (navigator.audioSession) navigator.audioSession.type = "play-and-record"; } catch (_) {}
   VO.asking = true;
   // the plain request is the fallback: some iPad setups reject the processing options
   const ask = () => navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
@@ -4325,6 +4328,7 @@ function voiceClose() {
   if (VO.stream) { VO.stream.getTracks().forEach(tr => tr.stop()); VO.stream = null; }
   if (VO.node) { VO.node.disconnect(); VO.node = null; }
   VO.pre = [];
+  try { if (navigator.audioSession && !VO.on) navigator.audioSession.type = "playback"; } catch (_) {}
 }
 // a team's bar: press = buzz (handled by the game) and, with voice on, start listening
 function voicePress(i) {
@@ -4409,6 +4413,30 @@ function voiceMatch(heard, answer) {
   });
 }
 if (VO.on) voiceLoad();
+
+// ---------- updates: Safari can keep an old copy, so ask the site for the newest version ----------
+let newerVersion = 0;
+async function checkUpdate() {
+  if (!/^https?:$/.test(location.protocol)) return;
+  try {
+    const r = await fetch(location.pathname + "?check=" + Date.now(), { cache: "no-store" });
+    const m = (await r.text()).match(/const APP_VERSION = (\d+);/);
+    if (m && +m[1] > APP_VERSION) { newerVersion = +m[1]; maybeReload(); }
+  } catch (_) {}
+}
+function maybeReload() {
+  if (!newerVersion) return;
+  // one try per version, so a stale copy from the server can't cause a reload loop
+  let tried = 0; try { tried = +sessionStorage.getItem("kaffebar-reload-to") || 0; } catch (_) {}
+  if (tried >= newerVersion) return;
+  if (S.mode === "menu" && !P.stack.length) {
+    try { sessionStorage.setItem("kaffebar-reload-to", String(newerVersion)); } catch (_) {}
+    return location.replace(location.pathname + "?v=" + newerVersion);
+  }
+  if (!maybeReload.told) { maybeReload.told = true; toast("🔄 Ny versjon · den lastes når du går til menyen"); }
+}
+setTimeout(checkUpdate, 3000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkUpdate(); });
 
 renderMenu();
 setTimeout(() => document.getElementById("splash")?.remove(), 1800);
