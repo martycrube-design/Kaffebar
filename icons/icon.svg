@@ -1,43 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <defs>
-    <radialGradient id="bg" cx="50%" cy="42%" r="70%">
-      <stop offset="0" stop-color="#3a2f8f"/><stop offset=".6" stop-color="#1c1850"/><stop offset="1" stop-color="#120f33"/>
-    </radialGradient>
-    <linearGradient id="cup" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#e6e1fb"/>
-    </linearGradient>
-    <linearGradient id="kaffe" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#8a4b22"/><stop offset="1" stop-color="#5a2e12"/>
-    </linearGradient>
-  </defs>
-  <rect width="1024" height="1024" fill="url(#bg)"/>
-  <!-- the four team bars around the table -->
-  <rect x="232" y="58" width="560" height="74" rx="37" fill="#ffd23f"/>
-  <rect x="232" y="892" width="560" height="74" rx="37" fill="#ff8a1f"/>
-  <rect x="58" y="262" width="74" height="500" rx="37" fill="#ff4f8b"/>
-  <rect x="892" y="262" width="74" height="500" rx="37" fill="#5b86ff"/>
-  <!-- steam -->
-  <g fill="none" stroke="#ffffff" stroke-width="30" stroke-linecap="round" opacity=".85">
-    <path d="M430 330c-40-45 40-70 0-120"/>
-    <path d="M512 315c-45-55 45-80 0-140"/>
-    <path d="M594 330c-40-45 40-70 0-120"/>
-  </g>
-  <!-- saucer -->
-  <ellipse cx="512" cy="742" rx="250" ry="48" fill="#cfc8f2"/>
-  <ellipse cx="512" cy="730" rx="250" ry="44" fill="#ffffff"/>
-  <!-- handle -->
-  <path d="M700 470c95 0 115 140 10 165" fill="none" stroke="#ffffff" stroke-width="44" stroke-linecap="round"/>
-  <!-- cup -->
-  <path d="M305 420h414c0 0 -6 175 -70 255c-30 38 -80 52 -137 52s-107-14-137-52c-64-80-70-255-70-255z" fill="url(#cup)"/>
-  <ellipse cx="512" cy="420" rx="207" ry="46" fill="#ffffff"/>
-  <ellipse cx="512" cy="424" rx="180" ry="34" fill="url(#kaffe)"/>
-  <!-- latte heart -->
-  <path d="M512 446c-38-22-58-34-58-48c0-11 9-18 20-18c16 0 30 12 38 22c8-10 22-22 38-22c11 0 20 7 20 18c0 14-20 26-58 48z" fill="#f4e3cf"/>
-  <!-- a little stripe in the team colours on the cup -->
-  <g>
-    <rect x="352" y="540" width="80" height="22" rx="11" fill="#ff8a1f"/>
-    <rect x="442" y="540" width="80" height="22" rx="11" fill="#ffd23f"/>
-    <rect x="532" y="540" width="80" height="22" rx="11" fill="#ff4f8b"/>
-    <rect x="622" y="540" width="56" height="22" rx="11" fill="#5b86ff"/>
-  </g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><defs>
+<radialGradient id="bg" cx="50%" cy="38%" r="78%"><stop offset="0" stop-color="#2b2380"/><stop offset=".65" stop-color="#16124a"/><stop offset="1" stop-color="#0a0822"/></radialGradient>
+<radialGradient id="cof" cx="42%" cy="38%" r="65%"><stop offset="0" stop-color="#a5622c"/><stop offset=".75" stop-color="#6b3714"/><stop offset="1" stop-color="#4a230a"/></radialGradient>
+<linearGradient id="cupL" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#e4def9"/></linearGradient>
+<linearGradient id="cupD" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#d9d2f5"/><stop offset="1" stop-color="#b9b0e6"/></linearGradient>
+<filter id="sh" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="22" stdDeviation="24" flood-color="#03021a" flood-opacity=".55"/></filter>
+</defs><rect width="1024" height="1024" fill="url(#bg)"/><g filter="url(#sh)"><circle cx="512" cy="512" r="444" fill="#f2efff"/></g><path d="M102.0 512.0A410 410 0 0 1 512.0 102.0" fill="none" stroke="#ff4f8b" stroke-width="62" stroke-linecap="butt"/><path d="M512.0 102.0A410 410 0 0 1 922.0 512.0" fill="none" stroke="#ffd23f" stroke-width="62" stroke-linecap="butt"/><path d="M922.0 512.0A410 410 0 0 1 512.0 922.0" fill="none" stroke="#5b86ff" stroke-width="62" stroke-linecap="butt"/><path d="M512.0 922.0A410 410 0 0 1 102.0 512.0" fill="none" stroke="#ff8a1f" stroke-width="62" stroke-linecap="butt"/><g filter="url(#sh)"><g transform="rotate(-40 512 512)"><rect x="782" y="467.0" width="135" height="90" rx="45.0" fill="url(#cupL)"/></g><circle cx="512" cy="512" r="300" fill="url(#cupL)"/></g><circle cx="512" cy="512" r="250" fill="url(#cof)"/><path transform="translate(-92.2 -84.2) scale(1.18)" d="M512 650c-100-62-152-100-152-150c0-38 30-64 66-64c38 0 66 24 86 52c20-28 48-52 86-52c36 0 66 26 66 64c0 50-52 88-152 150z" fill="#f6e6d2" opacity="1"/><ellipse cx="420" cy="380" rx="90" ry="28" fill="#fff" opacity=".15" transform="rotate(-30 420 380)"/></svg>
