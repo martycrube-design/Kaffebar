@@ -832,6 +832,21 @@ body.voice-busy .say-bar { visibility: hidden; }
 .share-btns .btn.hot { background: var(--accent); color: var(--ink); box-shadow: 0 5px 0 var(--accent-d); }
 .qr-box.empty { border-color: var(--accent); }
 .qr-msg { font-family: var(--display); font-weight: 800; color: var(--accent); }
+.qr-sub { font-size: clamp(12px, 1.8vmin, 15px); opacity: .7; text-align: center; max-width: 46ch; }
+.qr-box.anim { position: relative; }
+.qr-step { position: absolute; right: 8px; bottom: 8px; padding: 4px 10px; border-radius: 10px; background: var(--ink); color: #fff; font-family: var(--display); font-weight: 800; font-size: 14px; }
+.scan { position: fixed; inset: 0; z-index: 90; background: #000; display: grid; place-items: center; }
+.scan video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.scan-frame { position: relative; width: min(70vmin, 620px); aspect-ratio: 1; border-radius: 28px; box-shadow: 0 0 0 4px var(--accent), 0 0 0 100vmax rgba(0,0,0,.4); }
+.scan-msg { position: absolute; top: max(4vmin, 16px); left: 0; right: 0; margin: 0 auto; max-width: 44ch; padding: 0 16px; text-align: center; color: #fff; font-family: var(--display); font-weight: 800; font-size: clamp(16px, 2.8vmin, 24px); line-height: 1.35; text-shadow: 0 2px 8px #000; }
+.scan-bar { position: absolute; top: calc(max(4vmin, 16px) + 9vmin); left: 50%; transform: translateX(-50%); width: min(60vw, 420px); height: 12px; border-radius: 6px; background: rgba(255,255,255,.25); overflow: hidden; }
+.scan-bar i { display: block; height: 100%; width: 0; background: var(--ok); transition: width .2s; }
+.scan-btns { position: absolute; bottom: max(4vmin, 16px); left: 0; right: 0; display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
+.scan-btns .btn { display: inline-flex; align-items: center; gap: 8px; background: rgba(23,17,46,.8); }
+.scan-btns .btn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.scan.nocam { background: radial-gradient(ellipse at 50% 45%, var(--bg-2), var(--bg) 75%); }
+.scan.nocam .scan-frame { display: none; }
+.scan.nocam .scan-msg { position: static; }
 @media (orientation: portrait) { .share { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1.9fr) minmax(0, 1fr); } .share.recv { grid-template-rows: minmax(0, 1fr); } .share-qr { order: -1; } }
 /* what's new, once per release */
 .news { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 16px; background: rgba(18,15,51,.72); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); animation: news-in .25s ease; }
@@ -4155,54 +4170,87 @@ function sriEnd(skip) {
 
 // ---------- share word lists by QR code: the lists ride inside the code itself, so no server is needed ----------
 const APP_URL = "https://martycrube-design.github.io/Kaffebar/";
-const QR_MAX = 2900; // about what one QR code can hold (version 40, low error correction)
+// the lists go into the code as base-43 text, which QR codes store in their compact letters-and-digits mode:
+// about 30% more words per code than the old base64 codes (KB0/KB1), which still open
+const B43 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ$*+-./:";
+const ONE_QR = 2000;   // payload characters in one still code (about 200 words); more plays as an animated code, which scans more easily
+const PART = 700;      // characters per frame of an animated code: small enough to scan from across the table
 const b64u = bytes => { let s = ""; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
 const unb64u = s => { const b = atob(s.replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from(b, c => c.charCodeAt(0)); };
+function b43(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 2) {
+    if (i + 1 < bytes.length) { const v = bytes[i] * 256 + bytes[i + 1]; s += B43[v % 43] + B43[(v / 43 | 0) % 43] + B43[v / 1849 | 0]; }
+    else { const v = bytes[i]; s += B43[v % 43] + B43[v / 43 | 0]; }
+  }
+  return s;
+}
+function unb43(s) {
+  const out = [], d = c => { const k = B43.indexOf(c); if (k < 0) throw new Error("bad"); return k; };
+  for (let i = 0; i < s.length; i += 3) {
+    if (i + 2 < s.length) { const v = d(s[i]) + d(s[i + 1]) * 43 + d(s[i + 2]) * 1849; if (v > 65535) throw new Error("bad"); out.push(v >> 8, v & 255); }
+    else if (i + 1 < s.length) { const v = d(s[i]) + d(s[i + 1]) * 43; if (v > 255) throw new Error("bad"); out.push(v); }
+    else throw new Error("bad");
+  }
+  return Uint8Array.from(out);
+}
 const squeeze = async (bytes, stream) => new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
 const flat = s => String(s).replace(/[\t\r\n]+/g, " ").trim();
 async function packLists(sets) {
   const json = new TextEncoder().encode(JSON.stringify(sets.map(s => [flat(s.name), s.words.map(([a, b]) => flat(a) + "\t" + flat(b)).join("\n")])));
-  if (window.CompressionStream) try { return "KB1." + b64u(await squeeze(json, new CompressionStream("deflate-raw"))); } catch (_) {}
+  if (window.CompressionStream) try { return "KB2." + b43(await squeeze(json, new CompressionStream("deflate-raw"))); } catch (_) {}
   return "KB0." + b64u(json);
 }
 // a code can come from a link, a scan or a paste, so find it anywhere in the text
-const findCode = text => (/KB[01]\.[A-Za-z0-9_-]{8,}/.exec(String(text || "")) || [null])[0];
+const findCode = text => (/KB2\.[0-9A-Z$*+\-.\/:]{8,}|KB[01]\.[A-Za-z0-9_-]{8,}/.exec(String(text || "")) || [null])[0];
 async function unpackLists(text) {
   const code = findCode(text); if (!code) return null;
-  try {
-    let bytes = unb64u(code.slice(4));
-    if (code[2] === "1") bytes = await squeeze(bytes, new DecompressionStream("deflate-raw"));
-    const arr = JSON.parse(new TextDecoder().decode(bytes));
-    if (!Array.isArray(arr)) return null;
-    return arr.slice(0, 200).map(([name, w]) => ({
-      name: String(name || "Ordliste").slice(0, 80),
-      words: String(w || "").split("\n").slice(0, 2000).map(l => l.split("\t")).filter(p => p.length === 2 && p[0] && p[1]),
-    })).filter(s => s.words.length);
-  } catch (_) { return null; }
+  // a link pasted at the end of a sentence can pick up a full stop or two, so try without them as well
+  const tries = code[2] === "2" ? [code, code.slice(0, -1), code.slice(0, -2)] : [code];
+  for (const c of tries) {
+    try {
+      let bytes = c[2] === "2" ? unb43(c.slice(4)) : unb64u(c.slice(4));
+      if (c[2] !== "0") bytes = await squeeze(bytes, new DecompressionStream("deflate-raw"));
+      const arr = JSON.parse(new TextDecoder().decode(bytes));
+      if (!Array.isArray(arr)) continue;
+      return arr.slice(0, 200).map(([name, w]) => ({
+        name: String(name || "Ordliste").slice(0, 80),
+        words: String(w || "").split("\n").slice(0, 5000).map(l => l.split("\t")).filter(p => p.length === 2 && p[0] && p[1]),
+      })).filter(s => s.words.length);
+    } catch (_) {}
+  }
+  return null;
 }
 const shareLink = code => APP_URL + "#kb=" + code;
-function qrSVG(text) {
+// one frame of an animated code: KBP.<id>.<part>.<parts>.<piece of the payload>, all in the compact mode
+const PART_RE = /KBP\.([0-9A-Z]{3})\.(\d{1,3})\.(\d{1,3})\.([0-9A-Z$*+\-.\/:]+)/;
+function splitCode(code) {
+  const body = code.slice(4), n = Math.ceil(body.length / PART), id = [0, 0, 0].map(() => B43[Math.random() * 36 | 0]).join("");
+  return [...Array(n).keys()].map(i => `KBP.${id}.${i + 1}.${n}.${body.slice(i * PART, (i + 1) * PART)}`);
+}
+// segs: [text, mode] pairs, so a link can be ordinary text and the lists the compact part
+function qrSVG(segs) {
   let q;
-  for (const ec of ["M", "L"]) { try { q = qrcode(0, ec); q.addData(text); q.make(); break; } catch (_) { q = null; } }
+  for (const ec of ["L", "M"]) { try { q = qrcode(0, ec); for (const [t, m] of segs) q.addData(t, m); q.make(); break; } catch (_) { q = null; } }
   if (!q) return null;
   const n = q.getModuleCount(), z = 4; let d = "";
   for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (q.isDark(r, c)) d += `M${c + z} ${r + z}h1v1h-1z`;
   return `<svg viewBox="0 0 ${n + z * 2} ${n + z * 2}" shape-rendering="crispEdges" role="img" aria-label="QR code"><rect width="100%" height="100%" fill="#fff"/><path d="${d}" fill="#17112e"/></svg>`;
 }
+const linkSegs = code => code[2] === "2" ? [[APP_URL + "#kb=KB2.", "Byte"], [code.slice(4), "Alphanumeric"]] : [[shareLink(code), "Byte"]];
 const same = (a, b) => a.name === b.name && a.words.length === b.words.length && a.words.every(([x, y], i) => b.words[i][0] === x && b.words[i][1] === y);
 const QR_ICO = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM18 18h3v3M14 20v1M20 14v1"/></svg>';
 const CAM_ICO = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
 
 PANELS.share = () => {
   const all = allSets(); P.shareSel = P.shareSel || new Set(all.map(s => s.id));
-  const n = all.filter(s => P.shareSel.has(s.id)).reduce((t, s) => t + s.words.length, 0);
   return {
     title: "Del ordlister", note: "On the other iPad: Ordliste → Skann QR",
     body: all.length ? `<div class="share">
       <div class="share-pick"><p class="lead">Tap a list to leave it out of the code.</p>
         <div class="share-list">${all.map(s => `<button class="share-it${P.shareSel.has(s.id) ? " in" : ""}" data-p="sh-tog" data-id="${s.id}" aria-pressed="${P.shareSel.has(s.id)}"><span class="tick"></span><b>${esc(s.name)}</b><small>${s.words.length} ord</small></button>`).join("")}</div>
         <div class="share-btns"><button class="btn small" data-p="sh-copy">Kopier lenke</button><button class="btn small" data-p="sh-code">Kopier kode</button></div></div>
-      <div class="share-qr"><div class="qr-box" id="qr-box"></div><div class="qr-msg" id="qr-msg">${P.shareSel.size ? `${P.shareSel.size} ${P.shareSel.size === 1 ? "liste" : "lister"} · ${n} ord` : "Pick at least one list"}</div></div>
+      <div class="share-qr"><div class="qr-box" id="qr-box"></div><div class="qr-msg" id="qr-msg"></div><div class="qr-sub" id="qr-sub"></div></div>
     </div>` : `<div class="prev-empty"><b>No lists yet</b><small>Add a Quizlet set first, then come back here to share it.</small></div>`,
   };
 };
@@ -4216,19 +4264,34 @@ PANELS.recv = () => {
       <div class="share-btns"><button class="btn primary" data-p="rc-add">Legg til</button><button class="btn" data-p="rc-no">Avbryt</button></div></div></div>`,
   };
 };
+// a big share plays as a loop of smaller codes, about two a second
+let QR_ANIM = 0;
 async function fillShare() {
-  const box = panelEl.querySelector("#qr-box"), msg = panelEl.querySelector("#qr-msg"); if (!box) return;
-  const sel = allSets().filter(s => P.shareSel.has(s.id));
-  if (!sel.length) { box.innerHTML = ""; box.classList.add("empty"); return; }
-  const code = P.shareCode = await packLists(sel), link = shareLink(code);
+  clearInterval(QR_ANIM);
+  const box = panelEl.querySelector("#qr-box"), msg = panelEl.querySelector("#qr-msg"), sub = panelEl.querySelector("#qr-sub"); if (!box) return;
+  const sel = allSets().filter(s => P.shareSel.has(s.id)), words = sel.reduce((t, s) => t + s.words.length, 0);
+  if (!sel.length) { box.innerHTML = ""; box.classList.add("empty"); msg.textContent = "Pick at least one list"; sub.textContent = ""; return; }
+  const code = P.shareCode = await packLists(sel);
   if (P.stack.at(-1) !== "share") return;
-  const svg = link.length <= QR_MAX && qrSVG(link);
-  box.classList.toggle("empty", !svg);
-  const words = sel.reduce((t, s) => t + s.words.length, 0);
-  box.innerHTML = svg || `<div class="qr-big"><b>Too many words for a QR code</b><small>${words} ord is more than one code can hold (about 250). Send the link instead: it holds every word.</small>
-    <button class="btn primary qr-link" data-p="sh-copy">${ICO.clip}Kopier lenke</button>
-    <small>Then send it in a message. On the other iPad, open Ordliste → Legg til and tap Lim inn.</small><small class="alt">Or tap a few lists to leave them out until a QR code appears.</small></div>`;
-  panelEl.querySelectorAll(".share-btns [data-p=sh-copy]").forEach(x => x.classList.toggle("hot", !svg));
+  const head = `${sel.length} ${sel.length === 1 ? "liste" : "lister"} · ${words} ord`;
+  const one = code.length - 4 <= ONE_QR && qrSVG(linkSegs(code));
+  box.classList.remove("empty", "anim");
+  if (one) { box.innerHTML = one; msg.textContent = head; sub.textContent = "Scan it with Skann QR, or with the iPad's Camera app"; return; }
+  const frames = (code[2] === "2" ? splitCode(code) : []).map(p => qrSVG([[p, "Alphanumeric"]]));
+  if (!frames.length || frames.some(f => !f)) {
+    box.classList.add("empty");
+    box.innerHTML = `<div class="qr-big"><b>Too many words for a QR code</b><small>Send the link instead: it holds every word.</small><button class="btn primary qr-link" data-p="sh-copy">${ICO.clip}Kopier lenke</button></div>`;
+    msg.textContent = head; sub.textContent = ""; return;
+  }
+  box.classList.add("anim");
+  let k = 0;
+  const show = () => {
+    if (!box.isConnected) return clearInterval(QR_ANIM);
+    box.innerHTML = frames[k] + `<span class="qr-step">${k + 1} / ${frames.length}</span>`; k = (k + 1) % frames.length;
+  };
+  show(); QR_ANIM = setInterval(show, 450);
+  msg.textContent = `${head} · ${frames.length} codes in a loop`;
+  sub.textContent = "Hold Skann QR on it until every part is in. The iPad's Camera app can't read a moving code";
 }
 // the old copy trick on a selected text box still works where the clipboard API is blocked
 function copyByHand(t) {
@@ -4263,11 +4326,86 @@ function addReceived() {
   if (take.length) { sfx.yay(); toast(`Added ${take.length} ${take.length === 1 ? "list" : "lists"} · ${take.reduce((t, s) => t + s.words.length, 0)} ord`); }
   P.stack = ["settings", "sets"]; renderPanel(); updateCorners();
 }
-// scan a code: the page itself can't open a live camera, but it can ask for a photo, which opens the iPad camera
+// ---------- Skann QR: a live camera view that reads still and animated codes; a photo is the fallback ----------
 const scanIn = document.createElement("input");
 scanIn.type = "file"; scanIn.accept = "image/*"; scanIn.setAttribute("capture", "environment"); scanIn.hidden = true;
 document.body.appendChild(scanIn);
-function startScan() { scanIn.value = ""; scanIn.click(); }
+let SCAN = null;
+// [share of the short side to read (0 = the whole picture), largest size in pixels]
+const SCAN_CROPS = [[1, 1000], [.8, 900], [1, 1600], [0, 1200], [.6, 800]];
+function startScan() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { scanIn.value = ""; return scanIn.click(); }
+  liveScan();
+}
+// pieces of an animated code, kept until every part is in
+function takePart(st, text) {
+  const m = PART_RE.exec(text); if (!m) return false;
+  const [, id, i, n, piece] = m, N = +n;
+  if (!N || N > 999 || +i < 1 || +i > N) return true;
+  if (st.id !== id) { st.id = id; st.n = N; st.parts = new Map(); }
+  if (!st.parts.has(+i)) { st.parts.set(+i, piece); tone(880 + st.parts.size * 12, 0, .05, "triangle", .05); }
+  return true;
+}
+async function liveScan() {
+  const el = document.createElement("div"); el.className = "scan";
+  el.innerHTML = `<video playsinline muted autoplay></video><div class="scan-frame"></div>
+    <p class="scan-msg">Point the camera at the QR code on the other iPad</p>
+    <div class="scan-bar" hidden><i></i></div>
+    <div class="scan-btns"><button class="btn" data-scan="photo">${CAM_ICO}Ta bilde i stedet</button><button class="btn" data-scan="close">Lukk</button></div>`;
+  document.body.appendChild(el);
+  const st = SCAN = { el, stop: false, id: null, n: 0, parts: new Map() };
+  const video = el.querySelector("video"), msg = el.querySelector(".scan-msg"), bar = el.querySelector(".scan-bar");
+  const end = () => {
+    st.stop = true; if (st.stream) st.stream.getTracks().forEach(t => t.stop());
+    el.remove(); if (SCAN === st) SCAN = null;
+    try { if (st.session && navigator.audioSession) navigator.audioSession.type = st.session; } catch (_) {}
+  };
+  el.querySelector("[data-scan=close]").onclick = () => { sfx.pick(); end(); };
+  el.querySelector("[data-scan=photo]").onclick = () => { end(); scanIn.value = ""; scanIn.click(); };
+  const open = () => navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
+  try {
+    try { st.stream = await open(); }
+    catch (err) {
+      // the game's "playback" audio session can stop Safari from asking for the camera, so step out of it and ask again
+      if (!navigator.audioSession || err.name === "NotAllowedError") throw err;
+      st.session = navigator.audioSession.type; navigator.audioSession.type = "auto"; st.stream = await open();
+    }
+    if (st.stop) return end();
+    video.srcObject = st.stream; await video.play();
+  } catch (err) {
+    el.classList.add("nocam");
+    msg.innerHTML = err && err.name === "NotAllowedError"
+      ? "Kaffebar isn't allowed to use the camera.<br>Turn it on in Settings → Safari → Camera, or take a photo of the code instead."
+      : "The camera didn't start.<br>Take a photo of the code instead.";
+    return;
+  }
+  const cv = document.createElement("canvas"), ctx = cv.getContext("2d", { willReadFrequently: true });
+  let flip = 0;
+  const tick = () => {
+    if (st.stop) return;
+    if (video.videoWidth) {
+      // the QR reader is fussy about scale, so each frame tries the next of a few crops and sizes
+      const vw = video.videoWidth, vh = video.videoHeight, [f, S] = SCAN_CROPS[flip++ % SCAN_CROPS.length];
+      const sw = f ? Math.min(vw, vh) * f : vw, sh = f ? sw : vh, k = Math.min(1, S / Math.max(sw, sh));
+      cv.width = sw * k | 0; cv.height = sh * k | 0;
+      ctx.drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, cv.width, cv.height);
+      const hit = jsQR(ctx.getImageData(0, 0, cv.width, cv.height).data, cv.width, cv.height, { inversionAttempts: "dontInvert" });
+      if (hit && hit.data) {
+        if (findCode(hit.data)) { end(); receiveCode(hit.data); return; }
+        if (takePart(st, hit.data)) {
+          bar.hidden = false; bar.firstElementChild.style.width = (st.parts.size / st.n * 100) + "%";
+          msg.textContent = `Got ${st.parts.size} of ${st.n} parts · keep it pointed at the code`;
+          if (st.parts.size === st.n) {
+            const code = "KB2." + [...Array(st.n).keys()].map(i => st.parts.get(i + 1)).join("");
+            end(); receiveCode(code); return;
+          }
+        } else msg.textContent = "That QR code isn't a Kaffebar code";
+      }
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
 // try a few sizes and crops: a photo of a screen is big, a bit blurry and the code may sit anywhere in it
 async function readQR(file) {
   let img;
@@ -4291,7 +4429,7 @@ scanIn.addEventListener("change", async () => {
   let text = null; try { text = await readQR(f); } catch (_) {}
   if (text && findCode(text)) return receiveCode(text);
   sfx.miss();
-  toast(text ? "That QR code isn't a Kaffebar code" : "Couldn't read the code · hold the iPad closer so the QR fills the photo, then try again");
+  toast(text && PART_RE.test(text) ? "That's a moving code · use the live Skann QR for it" : text ? "That QR code isn't a Kaffebar code" : "Couldn't read the code · hold the iPad closer so the QR fills the photo, then try again");
 });
 panelEl.addEventListener("click", e => {
   const b = e.target.closest("[data-p]"); if (!b || b.disabled) return;
@@ -4319,8 +4457,12 @@ addEventListener("hashchange", checkLink);
 setTimeout(checkLink, 1900);
 
 // ---------- what's new: pops up once after a new release (bump APP_VERSION and add a note each release) ----------
-const APP_VERSION = 54;
+const APP_VERSION = 55;
 const NEWS = [
+  { v: 55, title: "Skann QR", items: [
+    ["📷", "<b>Skann QR</b> now uses the live camera: point it at the code and the lists pop up by themselves."],
+    ["🔳", "Codes hold about a third more words, and a big set plays as a <b>moving code</b>. Keep Skann QR on it until every part is in."],
+    ["📱", "The iPad's own Camera app can read a still code too. It opens Kaffebar with the lists."]] },
   { v: 52, title: "Mobil", items: [
     ["📱", "Kaffebar works better on phones: on an iPhone turned sideways, cards show one readable side, and Quiz! answers fit on small screens."]] },
   { v: 49, title: "Nytt ikon", items: [
