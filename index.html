@@ -886,6 +886,9 @@ body.lanes .corner span { display: none; }
 .lq-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: clamp(4px, .9vmin, 8px); }
 @container (max-width: 520px) { .lq-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .lq-ans { min-height: clamp(30px, 5vmin, 44px); } }
 .lq-ans { min-height: clamp(34px, 6.6vmin, 58px); border-radius: 14px; background: var(--soft); display: flex; align-items: center; gap: 8px; padding: 4px 10px; text-align: left; font-weight: 700; font-size: clamp(12px, 1.9vmin, 17px); line-height: 1.15; color: var(--ink); min-width: 0; transition: transform .08s; }
+/* phones: tighter lanes so the question, all four answers and the score bar fit */
+@media (max-height: 500px) { .qg .gl { display: none; } .qmid { gap: 12px; } }
+@media (max-height: 600px), (max-width: 400px) { .lq-ans { min-height: 28px; } .lq-bar { height: 28px; } .lq-card { padding: 5px; gap: 4px; } .lane-in { gap: 3px; padding-top: 3px; } .lq-q { font-size: 13px; } }
 @container (max-width: 380px) { .lq-q { font-size: 15px; } .lq-ans { font-size: 12px; padding: 3px 6px; gap: 5px; border-radius: 10px; } .lq-ans .sh { width: 1.5em; height: 1.5em; border-radius: 6px; } .lq-card { padding: 6px; gap: 5px; } .lq-grid { gap: 4px; } }
 .lq-ans:active { transform: scale(.96); }
 .lq-ans .sh { flex: 0 0 auto; width: 1.7em; height: 1.7em; display: grid; place-items: center; border-radius: 8px; background: var(--oc); color: var(--white); font-size: .85em; }
@@ -963,6 +966,9 @@ body.padmode .corner[data-corner="settings"] { background: #b6f03c; box-shadow: 
   .btn { min-height: 44px; padding: 0 14px; }
 }
 @media (max-height: 500px) {
+  /* a phone on its side is too short for the upside-down copy, so the card shows one readable half */
+  .card { grid-template-rows: minmax(0, 1fr); max-height: none; }
+  .card > .half.flip, .card > .fold { display: none; }
   .addx { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); grid-template-rows: none; }
   .add-src h3, .add-prev h3 { display: none; }
   .clip-msg { padding: 6px 10px; font-size: 12px; }
@@ -1784,7 +1790,7 @@ function fitPads() {
     if (f < 1) inner.style.setProperty("--fit", Math.max(.3, f).toFixed(3));
   }
 }
-addEventListener("resize", () => { fitPads(); if (S.mode === "board" && F.land != null && F.land !== boardLand()) { F.drawn = []; renderBoard(); } });
+addEventListener("resize", () => { fitPads(); if (document.body.classList.contains("lanes")) growLanes(); if (S.mode === "board" && F.land != null && F.land !== boardLand()) { F.drawn = []; renderBoard(); } });
 function addPoints(i, n) {
   if (!POINTED.includes(S.mode)) return;
   const sc = pts(); sc[i] = Math.max(0, sc[i] + n); save(); renderPads();
@@ -2714,11 +2720,12 @@ function renderLanes() {
   const edge = v => v ? "calc(var(--Dh, var(--D)) + 8px)" : "calc(var(--cs) + 12px)";
   for (const el of [document.body]) { el.style.setProperty("--Lx", edge(hasL)); el.style.setProperty("--Rx", edge(hasR)); }
   lanesEl.innerHTML = sides.map((side, i) => side ? laneHTML(i, side) : "").join("");
-  growLanes();
+  // the lanes are still hidden on a game's first draw, so measure again once they show
+  growLanes(); requestAnimationFrame(growLanes);
 }
 // long questions wrap, so a lane grows deeper until its text fits (side lanes first, since they narrow the others)
 function growLanes() {
-  const b = document.body, cap = Math.min(innerWidth, innerHeight) * .42;
+  const b = document.body, cap = Math.max(Math.min(innerWidth, innerHeight) * .42, innerHeight > innerWidth ? innerHeight * .32 : 0);
   b.style.removeProperty("--Dv"); b.style.removeProperty("--Dh");
   for (const [prop, sel] of [["--Dh", ".lane.left, .lane.right"], ["--Dv", ".lane.top, .lane.bottom"]]) {
     let over = 0;
@@ -4312,8 +4319,10 @@ addEventListener("hashchange", checkLink);
 setTimeout(checkLink, 1900);
 
 // ---------- what's new: pops up once after a new release (bump APP_VERSION and add a note each release) ----------
-const APP_VERSION = 51;
+const APP_VERSION = 52;
 const NEWS = [
+  { v: 52, title: "Mobil", items: [
+    ["📱", "Kaffebar works better on phones: on an iPhone turned sideways, cards show one readable side, and Quiz! answers fit on small screens."]] },
   { v: 49, title: "Nytt ikon", items: [
     ["☕", "Kaffebar has its own app icon. To see it, remove Kaffebar from the home screen and add it again: Share → Add to Home Screen."]] },
   { v: 48, title: "Vinneren", items: [
@@ -4415,7 +4424,9 @@ async function voiceLoad() {
       let l = 0, n = 0; for (const [a, b] of files.values()) { l += a; n += b; }
       const pct = 100 * l / n; if (pct - VO.pct >= 3 || pct >= 100) { VO.pct = pct; voiceRefresh(); }
     };
-    const tries = [...(navigator.gpu ? [{ device: "webgpu", dtype: { encoder_model: "fp32", decoder_model_merged: "q4" } }] : []), { device: "wasm", dtype: "q8" }];
+    // phones get the leaner wasm build: the WebGPU one can use more memory than an iPhone gives a tab
+    const phone = /iPhone|iPod|Android.+Mobile/.test(navigator.userAgent);
+    const tries = [...(navigator.gpu && !phone ? [{ device: "webgpu", dtype: { encoder_model: "fp32", decoder_model_merged: "q4" } }] : []), { device: "wasm", dtype: "q8" }];
     for (const t of tries) {
       try {
         const asr = await pipeline("automatic-speech-recognition", VOICE_MODEL, { ...t, progress_callback });
