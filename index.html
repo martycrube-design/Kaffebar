@@ -1357,7 +1357,7 @@ function silentWav() {
 }
 function unlockAudio() {
   // "playback" keeps sound on with the silent switch, but blocks the microphone, so it switches only while a team talks
-  try { if (navigator.audioSession) navigator.audioSession.type = (() => { try { return !!VO.stream || !!VO.arming; } catch (_) { return false; } })() ? "play-and-record" : "playback"; } catch (e) {}
+  try { if (navigator.audioSession) navigator.audioSession.type = (() => { try { return !!VO.stream || !!VO.arming || !!VO.netLive; } catch (_) { return false; } })() ? "play-and-record" : "playback"; } catch (e) {}
   if (!silentEl) {
     try { silentEl = new Audio(silentWav()); silentEl.loop = true; silentEl.setAttribute("playsinline", ""); silentEl.setAttribute("webkit-playsinline", ""); } catch (e) {}
   }
@@ -4319,8 +4319,10 @@ addEventListener("hashchange", checkLink);
 setTimeout(checkLink, 1900);
 
 // ---------- what's new: pops up once after a new release (bump APP_VERSION and add a note each release) ----------
-const APP_VERSION = 52;
+const APP_VERSION = 53;
 const NEWS = [
+  { v: 53, title: "Bedre stemme", items: [
+    ["🎙️", "Stemme now uses online speech recognition (the same as the keyboard mic), so it hears your words much better on iPhone and iPad. Turn it on under Lyd → Stemme."]] },
   { v: 52, title: "Mobil", items: [
     ["📱", "Kaffebar works better on phones: on an iPhone turned sideways, cards show one readable side, and Quiz! answers fit on small screens."]] },
   { v: 49, title: "Nytt ikon", items: [
@@ -4396,20 +4398,25 @@ setTimeout(() => { if (orderFixed) toast(`🔄 Snudde ${orderFixed} ord · ${ord
 const VO = { on: load("kaffebar-voice", false), asr: null, loading: false, pct: 0, err: "", micErr: "", rec: null, stage: null, tries: 0, heard: "", spoke: 0, quiet: 0, floor: 0,
   ctx: null, stream: null, chunks: [], pre: [], peak: 0, t0: 0, run: 0, gen: 0, frames: 0, lvl: 0, rate: 48000 };
 const VOICE_MODEL = "onnx-community/whisper-base";
-const voiceReady = () => VO.on && !!VO.asr;
+// Online recognition comes first: Safari uses Apple's speech service (the one behind dictation) and
+// Chrome uses Google's. It hears learners far better than the small model, which stays as the backup.
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const voiceNet = () => !!SR && !VO.netBroken;
+const voiceReady = () => VO.on && (voiceNet() || !!VO.asr);
 const MIC_SVG = '<svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21M8.5 21h7"/></svg>';
 function voiceCard() {
   const bad = VO.micErr || VO.err;
-  const state = VO.loading ? `Laster ${Math.round(VO.pct)}%` : VO.on && bad ? "Feil" : VO.on && VO.asr ? "På" : VO.on ? "Venter" : "Av";
+  const state = VO.loading ? `Laster ${Math.round(VO.pct)}%` : VO.on && bad ? "Feil" : voiceReady() ? "På" : VO.on ? "Venter" : "Av";
   const small = bad && VO.on ? esc(bad)
     : VO.loading ? "Downloading the speech model. Only the first time, about 80 MB."
-    : "In Først! tap your bar, then say the answer. Runs on this iPad.";
+    : voiceNet() ? "In Først! tap your bar, tap the mic, then say the answer. Uses online speech recognition."
+    : "In Først! tap your bar, tap the mic, then say the answer. Runs on this device.";
   return `<button class="scard${VO.on ? " on" : ""}" data-p="voice">${MIC_SVG.replace("<svg", '<svg class="ico"')}<span class="badge state${voiceReady() ? " yes" : ""}">${state}</span><b>Stemme</b><small>${small}</small></button>`;
 }
 function voiceRefresh() { if (P.stack.at(-1) === "audio") renderPanel(); }
 function voiceToggle() {
   VO.on = !VO.on; store("kaffebar-voice", VO.on); sfx.pick(); VO.micErr = "";
-  if (VO.on) voiceLoad(); else voiceClose();
+  if (!VO.on) voiceClose(); else if (!voiceNet()) voiceLoad();
   voiceRefresh();
 }
 async function voiceLoad() {
@@ -4424,9 +4431,7 @@ async function voiceLoad() {
       let l = 0, n = 0; for (const [a, b] of files.values()) { l += a; n += b; }
       const pct = 100 * l / n; if (pct - VO.pct >= 3 || pct >= 100) { VO.pct = pct; voiceRefresh(); }
     };
-    // phones get the leaner wasm build: the WebGPU one can use more memory than an iPhone gives a tab
-    const phone = /iPhone|iPod|Android.+Mobile/.test(navigator.userAgent);
-    const tries = [...(navigator.gpu && !phone ? [{ device: "webgpu", dtype: { encoder_model: "fp32", decoder_model_merged: "q4" } }] : []), { device: "wasm", dtype: "q8" }];
+    const tries = [...(navigator.gpu ? [{ device: "webgpu", dtype: { encoder_model: "fp32", decoder_model_merged: "q4" } }] : []), { device: "wasm", dtype: { encoder_model: "fp32", decoder_model_merged: "q8" } }];
     for (const t of tries) {
       try {
         const asr = await pipeline("automatic-speech-recognition", VOICE_MODEL, { ...t, progress_callback });
@@ -4443,6 +4448,8 @@ async function voiceLoad() {
 const ARM_MS = 5000, LISTEN_MS = 3000, PRE_CHUNKS = 10;
 function voiceArm() {
   if (!voiceReady() || VO.stream || VO.arming) return;
+  // online recognition opens the mic itself on each turn; the iPad only needs to be in record mode
+  if (voiceNet()) { VO.netLive = true; try { if (navigator.audioSession) navigator.audioSession.type = "play-and-record"; } catch (_) {} return; }
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     VO.micErr = "This browser can't use the microphone here. Open Kaffebar in Safari.";
     return toast("🎙️ " + VO.micErr);
@@ -4482,26 +4489,27 @@ function voiceArm() {
     });
 }
 // back to plain playback, which keeps sound on with the silent switch
-function voiceSession() { try { if (navigator.audioSession && !VO.stream) navigator.audioSession.type = "playback"; } catch (_) {} }
+function voiceSession() { try { if (navigator.audioSession && !VO.stream && !VO.netLive) navigator.audioSession.type = "playback"; } catch (_) {} }
 // the team that buzzed has 5 seconds to tap its blinking mic, then 3 seconds to say it
 function voiceTurn(i) {
   if (!voiceReady()) return false;
-  if (!VO.stream) { voiceArm(); return false; }   // not ready yet: this round is judged by hand
+  if (!VO.stream && !voiceNet()) { voiceArm(); return false; }   // not ready yet: this round is judged by hand
   stopTimers(); ++VO.run;
   VO.stage = "arm"; VO.rec = i; VO.armEnd = Date.now() + ARM_MS;
+  // online: start listening already, since the service takes a moment to warm up
+  if (voiceNet()) { voicePrep(); srStart(i); }
   for (let k = 1; k < ARM_MS / 1000; k++) later(() => tone(880, 0, .05, "square", .06), k * 1000);
   later(() => { if (VO.stage === "arm" && B.buzzed === i) voiceMiss(i, "Tiden er ute!"); }, ARM_MS);
   renderBuzz(); return true;
 }
 function voiceListen(i) {
-  if (!voiceReady() || VO.stage !== "arm" || !VO.stream) return false;
+  if (!voiceReady() || VO.stage !== "arm" || (!VO.stream && !VO.sr)) return false;
   if (S.mode !== "buzz" || B.phase !== "buzzed" || B.buzzed !== i) return false;
   stopTimers(); ++VO.run;
-  if (VO.ctx.state !== "running") VO.ctx.resume().catch(() => {});
-  const [no, en] = B.deck[B.idx]; VO.col = B.showNo ? 1 : 0; VO.answer = B.showNo ? en : no; VO.lang = B.showNo ? "english" : "norwegian";
-  VO.words = voiceWords(VO.answer, VO.col); VO.lastPeek = Date.now(); VO.peekP = null;
+  if (VO.ctx && VO.ctx.state !== "running") VO.ctx.resume().catch(() => {});
+  voicePrep(); VO.lastPeek = Date.now(); VO.peekP = null;
   VO.rec = i; VO.stage = "listen"; VO.chunks = VO.pre.slice(); VO.frames = 0; VO.peak = 0; VO.spoke = 0; VO.quiet = 0; VO.lvl = 0; VO.t0 = Date.now();
-  voiceDuck(true);
+  voiceDuck(true); if (VO.sr) srPulse(.3);
   clearTimeout(VO.safety); VO.safety = setTimeout(() => voiceStop(), LISTEN_MS);
   renderBuzz(); return true;
 }
@@ -4523,7 +4531,7 @@ function voiceLevel(rms, dur) {
 }
 // leaving Først! or turning Stemme off: release the mic so the iPad's mic light goes out
 function voiceOff() {
-  VO.gen++; clearTimeout(VO.safety);
+  VO.gen++; clearTimeout(VO.safety); srStop(); VO.netLive = false;
   if (VO.node) { VO.node.onaudioprocess = null; try { VO.src.disconnect(); VO.node.disconnect(); VO.mute.disconnect(); } catch (_) {} VO.node = VO.src = VO.mute = null; }
   if (VO.stream) { VO.stream.getTracks().forEach(tr => tr.stop()); VO.stream = null; }
   VO.pre = []; voiceSession();
@@ -4531,7 +4539,7 @@ function voiceOff() {
 // a team's turn ends early: the card changed or the game was left
 function voiceAbort() {
   if (!VO.stage) return;
-  VO.run++; clearTimeout(VO.safety);
+  VO.run++; clearTimeout(VO.safety); srStop();
   if (VO.stage === "listen") voiceDuck(false);
   VO.stage = null; VO.rec = null; document.documentElement.style.setProperty("--lvl", 0);
 }
@@ -4551,7 +4559,7 @@ function voicePeek() {
   })();
 }
 function voiceWin(i) {
-  VO.run++; clearTimeout(VO.safety);
+  VO.run++; clearTimeout(VO.safety); srStop();
   if (VO.stage === "listen") voiceDuck(false);
   VO.stage = null; VO.rec = null; document.documentElement.style.setProperty("--lvl", 0);
   if (S.mode !== "buzz" || B.phase !== "buzzed" || B.buzzed !== i) return renderPads();
@@ -4564,24 +4572,94 @@ async function voiceStop() {
   VO.stage = "think"; voiceDuck(false);
   document.documentElement.style.setProperty("--lvl", 0);
   renderBuzz();
-  if (VO.peekP) await VO.peekP;   // one recognition at a time; it may already have found the word
-  if (run !== VO.run) return;
   let heard = "";
-  try {
-    const audio = await voiceTo16k(VO.chunks, VO.rate);
-    if (audio.length > 4000 && VO.peak > .01) heard = await voiceHear(audio, VO.lang, VO.words);
-  } catch (err) { console.warn(err); }
-  if (run !== VO.run) return;
-  if (heard && voiceMatch(heard, VO.answer, VO.col)) return voiceWin(i);
+  if (VO.sr) {
+    // online: let the service finish the last words, then judge everything it heard
+    await srFinish();
+    if (run !== VO.run) return;
+    heard = VO.srBest;
+    if (VO.srAlts.some(t => voiceMatch(t, VO.answer, VO.col))) return voiceWin(i);
+  } else {
+    if (VO.peekP) await VO.peekP;   // one recognition at a time; it may already have found the word
+    if (run !== VO.run) return;
+    try {
+      const audio = await voiceTo16k(VO.chunks, VO.rate);
+      if (audio.length > 4000 && VO.peak > .01) heard = await voiceHear(audio, VO.lang, VO.words);
+    } catch (err) { console.warn(err); }
+    if (run !== VO.run) return;
+    if (heard && voiceMatch(heard, VO.answer, VO.col)) return voiceWin(i);
+  }
   VO.stage = null; VO.rec = null;
   if (S.mode !== "buzz" || B.phase !== "buzzed" || B.buzzed !== i) return renderPads();
   voiceMiss(i, heard ? `Hørte «${esc(heard)}»` : "Hørte ingenting");
 }
 // one chance: a miss passes the word to the other teams
 function voiceMiss(i, why) {
-  VO.run++; VO.stage = null; VO.rec = null;
+  VO.run++; VO.stage = null; VO.rec = null; srStop();
   if (S.mode !== "buzz" || B.phase !== "buzzed" || B.buzzed !== i) return renderPads();
   sfx.miss(); toast(`${why} · ${TEAMS[i].name} passes`); passBuzz();
+}
+// the card's answer, its language and the list's other words in that language
+function voicePrep() {
+  const [no, en] = B.deck[B.idx]; VO.col = B.showNo ? 1 : 0; VO.answer = B.showNo ? en : no; VO.lang = B.showNo ? "english" : "norwegian";
+  VO.words = voiceWords(VO.answer, VO.col);
+}
+// ---- online recognition, one session per turn ----
+function srStart(i) {
+  srStop();
+  const r = new SR(); VO.sr = r; VO.srAlts = []; VO.srBest = ""; VO.srBase = ""; VO.srTries = 0;
+  r.lang = VO.lang === "english" ? "en-US" : "nb-NO";
+  r.continuous = true; r.interimResults = true; r.maxAlternatives = 5;
+  r.onresult = e => {
+    if (VO.sr !== r) return;
+    const best = [], alts = [];
+    for (let k = 0; k < e.results.length; k++) { const res = e.results[k]; best.push(res[0].transcript); for (let a = 0; a < res.length; a++) alts.push(res[a].transcript); }
+    VO.srBest = (VO.srBase + " " + best.join(" ")).trim(); VO.srAlts = [VO.srBest, ...alts];
+    if (VO.stage === "listen") srPulse(1);
+    // the answer counts the moment it's heard, even mid-sentence
+    if ((VO.stage === "listen" || VO.stage === "think") && VO.rec === i && VO.srAlts.some(t => voiceScore(t, VO.answer) >= .8)) voiceWin(i);
+  };
+  r.onerror = e => {
+    if (VO.sr !== r || e.error === "no-speech" || e.error === "aborted") return;
+    console.warn("speech recognition:", e.error);
+    srBroken(i, e.error);
+  };
+  r.onend = () => {
+    if (VO.sr !== r) return;
+    if (VO.srDone) return VO.srDone();
+    // Safari ends a session by itself after a pause; keep listening for the rest of the turn
+    if ((VO.stage === "arm" || VO.stage === "listen") && VO.rec === i && VO.srTries++ < 4) { VO.srBase = VO.srBest; try { r.start(); } catch (_) {} }
+  };
+  try { r.start(); } catch (err) { console.warn(err); srBroken(i, "start"); }
+}
+function srFinish() {
+  const r = VO.sr; if (!r) return Promise.resolve();
+  return new Promise(res => {
+    const t = setTimeout(() => done(), 1500), done = () => { clearTimeout(t); VO.srDone = null; res(); };
+    VO.srDone = done; try { r.stop(); } catch (_) { done(); }
+  });
+}
+function srStop() {
+  const r = VO.sr, d = VO.srDone; VO.sr = null; VO.srDone = null;
+  if (r) { r.onresult = r.onerror = r.onend = null; try { r.abort(); } catch (_) {} }
+  if (d) d();
+}
+// no level meter from the online service, so the mic jumps when words come in
+function srPulse(v) {
+  document.documentElement.style.setProperty("--lvl", v); clearTimeout(VO.lvlT);
+  if (v > .3) VO.lvlT = setTimeout(() => VO.stage === "listen" && srPulse(.3), 260);
+}
+// the online service is blocked or unreachable: switch to the on-device model, and judge this turn by ear
+function srBroken(i, why) {
+  srStop(); VO.netBroken = true; VO.netLive = false;
+  VO.micErr = why === "not-allowed" || why === "service-not-allowed"
+    ? "Speech recognition is blocked. Turn on Settings → General → Keyboard → Enable Dictation, and allow the mic. Using the on-device model for now."
+    : "Online speech recognition isn't working here, so Stemme uses the on-device model.";
+  toast("🎙️ " + esc(VO.micErr)); voiceLoad();
+  if (S.mode === "buzz" && B.phase === "buzzed" && B.buzzed === i && VO.stage) {
+    VO.run++; stopTimers(); clearTimeout(VO.safety); if (VO.stage === "listen") voiceDuck(false);
+    VO.stage = null; VO.rec = null; document.documentElement.style.setProperty("--lvl", 0); runSayClock(SAY_MS);
+  }
 }
 async function voiceTo16k(chunks, rate) {
   const len = chunks.reduce((n, c) => n + c.length, 0), all = new Float32Array(len);
@@ -4647,7 +4725,7 @@ function voiceMatch(heard, answer, col) {
   const rival = Math.max(0, ...WORDS.map(w => w[col]).filter(w => w !== answer).map(w => voiceScore(heard, w)));
   return own >= rival + .15;
 }
-if (VO.on) voiceLoad();
+if (VO.on && !voiceNet()) voiceLoad();
 
 // ---------- updates: Safari can keep an old copy, so ask the site for the newest version ----------
 let newerVersion = 0;
