@@ -4276,7 +4276,7 @@ async function fillShare() {
   const head = `${sel.length} ${sel.length === 1 ? "liste" : "lister"} · ${words} ord`;
   const one = code.length - 4 <= ONE_QR && qrSVG(linkSegs(code));
   box.classList.remove("empty", "anim");
-  if (one) { box.innerHTML = one; msg.textContent = head; sub.textContent = "Scan it with Skann QR, or with the iPad's Camera app"; return; }
+  if (one) { box.innerHTML = one; msg.textContent = head; sub.textContent = "On the other iPad: Ordliste → Skann QR"; return; }
   const frames = (code[2] === "2" ? splitCode(code) : []).map(p => qrSVG([[p, "Alphanumeric"]]));
   if (!frames.length || frames.some(f => !f)) {
     box.classList.add("empty");
@@ -4291,7 +4291,7 @@ async function fillShare() {
   };
   show(); QR_ANIM = setInterval(show, 450);
   msg.textContent = `${head} · ${frames.length} codes in a loop`;
-  sub.textContent = "Hold Skann QR on it until every part is in. The iPad's Camera app can't read a moving code";
+  sub.textContent = "On the other iPad: Ordliste → Skann QR, and hold it on the code until every part is in";
 }
 // the old copy trick on a selected text box still works where the clipboard API is blocked
 function copyByHand(t) {
@@ -4457,12 +4457,11 @@ addEventListener("hashchange", checkLink);
 setTimeout(checkLink, 1900);
 
 // ---------- what's new: pops up once after a new release (bump APP_VERSION and add a note each release) ----------
-const APP_VERSION = 55;
+const APP_VERSION = 56;
 const NEWS = [
   { v: 55, title: "Skann QR", items: [
     ["📷", "<b>Skann QR</b> now uses the live camera: point it at the code and the lists pop up by themselves."],
-    ["🔳", "Codes hold about a third more words, and a big set plays as a <b>moving code</b>. Keep Skann QR on it until every part is in."],
-    ["📱", "The iPad's own Camera app can read a still code too. It opens Kaffebar with the lists."]] },
+    ["🔳", "Codes hold about a third more words, and a big set plays as a <b>moving code</b>. Keep Skann QR on it until every part is in."]] },
   { v: 52, title: "Mobil", items: [
     ["📱", "Kaffebar works better on phones: on an iPhone turned sideways, cards show one readable side, and Quiz! answers fit on small screens."]] },
   { v: 49, title: "Nytt ikon", items: [
