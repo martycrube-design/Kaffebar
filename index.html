@@ -318,7 +318,17 @@ body.voice-busy .say-bar { visibility: hidden; }
 }
 .front { transform: rotateY(180deg); background: var(--white); color: var(--ink); display: grid; grid-template-rows: 1fr 1fr; }
 .front .half { padding: .6vmin 6%; gap: 0; }
-.front .main { --k: .48; }
+.front .main { --k: .48; overflow-wrap: break-word; hyphens: auto; line-height: 1.05; }
+.front .half { min-height: 0; overflow: hidden; }
+.mzoom { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 16px; background: rgba(18,15,51,.7); -webkit-backdrop-filter: blur(5px); backdrop-filter: blur(5px); animation: news-in .2s ease; }
+.mzoom-card { width: min(92vw, 820px); max-height: 86vh; display: grid; grid-template-rows: 1fr 1fr; border-radius: 28px; background: var(--white); color: var(--ink); box-shadow: 0 20px 60px rgba(0,0,0,.5); overflow: hidden; }
+.mzoom.no .mzoom-card { background: #fff5cf; }
+.mzoom .half { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1vmin; padding: 3vmin 5vmin; text-align: center; }
+.mzoom .half + .half { border-top: 2px dashed rgba(23,17,46,.15); }
+.mzoom .half.flip { transform: rotate(180deg); }
+.mzoom .lang { font-family: var(--display); font-size: 12px; letter-spacing: .16em; font-weight: 800; color: var(--muted); }
+.mzoom .main { font-size: clamp(22px, 4.6vmin, 46px); }
+.mzoom-x { position: absolute; bottom: 14px; left: 0; right: 0; text-align: center; font-family: var(--display); font-weight: 800; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: rgba(255,255,255,.7); }
 .front .lang { font-family: var(--display); font-size: 10px; letter-spacing: .16em; font-weight: 800; color: var(--muted); }
 .front.no { background: #fff5cf; }
 .tile.done .front { box-shadow: inset 0 0 0 5px var(--who, var(--ok)); }
@@ -1815,7 +1825,7 @@ function fitPads() {
     if (f < 1) inner.style.setProperty("--fit", Math.max(.3, f).toFixed(3));
   }
 }
-addEventListener("resize", () => { fitPads(); if (document.body.classList.contains("lanes")) growLanes(); if (S.mode === "board" && F.land != null && F.land !== boardLand()) { F.drawn = []; renderBoard(); } });
+addEventListener("resize", () => { fitPads(); if (S.mode === "memory") fitTiles(); if (document.body.classList.contains("lanes")) growLanes(); if (S.mode === "board" && F.land != null && F.land !== boardLand()) { F.drawn = []; renderBoard(); } });
 function addPoints(i, n) {
   if (!POINTED.includes(S.mode)) return;
   const sc = pts(); sc[i] = Math.max(0, sc[i] + n); save(); renderPads();
@@ -2384,9 +2394,12 @@ function gameOver() {
 const M = { tiles: [], open: [], turn: 0, busy: false };
 function startMemory() {
   S.mode = "memory";
-  let pool = shuffle(WORDS.filter(([no, en]) => no.length <= 26 && en.length <= 26));
-  if (pool.length < 4) pool = shuffle(WORDS);
-  const pairs = pool.slice(0, S.teams >= 3 ? 8 : 6);
+  // short pairs fit a card; a list of mostly sentences tops up with its shortest long ones
+  const need = S.teams >= 3 ? 8 : 6, words = t => t.trim().split(/\s+/).length, len = ([no, en]) => Math.max(no.length, en.length);
+  const short = ([no, en]) => words(no) <= 5 && words(en) <= 5 && no.length <= 32 && en.length <= 32;
+  let pool = shuffle(WORDS.filter(short));
+  if (pool.length < need) pool = pool.concat(shuffle(WORDS.filter(w => !short(w))).sort((a, b) => len(a) - len(b)));
+  const pairs = pool.slice(0, need);
   M.tiles = shuffle(pairs.flatMap(([no, en], p) => [{ p, text: no, lang: "no" }, { p, text: en, lang: "en" }]))
     .map(t => ({ ...t, state: "closed", who: null }));
   M.open = []; M.busy = false; M.turn = firstOn();
@@ -2395,7 +2408,7 @@ function startMemory() {
 function renderMemory() {
   const n = M.tiles.length, cols = Math.ceil(n / 2);
   const tiles = M.tiles.map((t, i) => {
-    const half = `<span class="lang">${t.lang === "no" ? "NORSK" : "ENGLISH"}</span><span class="main ${sizeClass(t.text)}">${t.text}</span>`;
+    const half = `<span class="lang">${t.lang === "no" ? "NORSK" : "ENGLISH"}</span><span class="main ${sizeClass(t.text)}">${esc(t.text)}</span>`;
     return `<button class="tile ${t.state}" data-tile="${i}" style="${t.who != null ? `--who:${TEAMS[t.who].color}` : ""}" aria-label="Kort ${i + 1}">
       <span class="tile-in"><span class="face back">?</span>
       <span class="face front ${t.lang}"><span class="half flip">${half}</span><span class="half">${half}</span></span></span></button>`;
@@ -2404,11 +2417,31 @@ function renderMemory() {
   show(`<div class="board" style="grid-template-columns:repeat(${cols},1fr);grid-template-rows:repeat(2,1fr)">${tiles}</div>`,
     `<span class="status">${left ? `${TEAMS[M.turn].name}: flip two cards` : "All matched! Ferdig!"}</span>
       <button class="btn${left ? "" : " primary"}" data-act="new-memory">New board</button>`);
+  fitTiles();
   renderPads();
+}
+// shrink a card's text until it fits its half of the card
+function fitTiles() {
+  for (const m of center.querySelectorAll(".tile .front .main")) {
+    m.style.fontSize = ""; m.classList.remove("shrunk");
+    const h = m.parentElement; let fs = parseFloat(getComputedStyle(m).fontSize), n = 0;
+    while ((h.scrollHeight > h.clientHeight + 1 || m.scrollWidth > m.clientWidth + 1) && fs > 9 && n++ < 40) { fs *= .92; m.style.fontSize = fs.toFixed(1) + "px"; m.classList.add("shrunk"); }
+  }
+}
+// a turned-up card with long text opens big in the middle, printed for both sides of the table
+function zoomTile(i) {
+  const t = M.tiles[i];
+  if (!t || t.state === "closed" || document.querySelector(".mzoom")) return;
+  const el = document.createElement("div"); el.className = `mzoom ${t.lang}`;
+  const half = `<span class="lang">${t.lang === "no" ? "NORSK" : "ENGLISH"}</span><span class="main">${esc(t.text)}</span>`;
+  el.innerHTML = `<div class="mzoom-card"><div class="half flip">${half}</div><div class="half">${half}</div></div><span class="mzoom-x">Tap to close</span>`;
+  el.addEventListener("click", () => { sfx.pick(); el.remove(); });
+  document.body.appendChild(el); sfx.flip();
 }
 function flipTile(i) {
   const t = M.tiles[i];
-  if (M.busy || t.state !== "closed") return;
+  if (t.state !== "closed") { const m = center.querySelector(`[data-tile="${i}"] .front .main`); if (m && (m.classList.contains("shrunk") || t.text.trim().split(/\s+/).length > 3)) zoomTile(i); return; }
+  if (M.busy) return;
   t.state = "open"; M.open.push(i); sfx.flip();
   center.querySelector(`[data-tile="${i}"]`).classList.add("open");
   if (M.open.length < 2) return;
@@ -4467,8 +4500,11 @@ addEventListener("hashchange", checkLink);
 setTimeout(checkLink, 1900);
 
 // ---------- what's new: pops up once after a new release (bump APP_VERSION and add a note each release) ----------
-const APP_VERSION = 57;
+const APP_VERSION = 58;
 const NEWS = [
+  { v: 58, title: "Huskespill", items: [
+    ["🃏", "<b>Huskespill</b> works with sentence lists now: it picks short pairs first, and text shrinks to fit the card."],
+    ["🔍", "Tap a turned-up card with a long phrase to see it big in the middle of the table."]] },
   { v: 57, title: "iPhone", items: [
     ["📱", "Smoother on iPhone: tapping with several fingers at once no longer zooms the screen, typing in a box doesn't zoom in, and cards have more room on a phone turned sideways."]] },
   { v: 55, title: "Skann QR", items: [
