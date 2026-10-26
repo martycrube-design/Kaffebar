@@ -1,4 +1,4 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
 <title>Kaffebar Bordspill</title>
 <link rel="apple-touch-icon" href="icons/icon-180.png?v=3">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png?v=3">
@@ -39,14 +39,14 @@
   --pad: clamp(72px, 11vmin, 116px);
   padding: 0;
 }
-html, body { height: 100%; margin: 0; overflow: hidden; }
+html, body { height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none; }
 body {
   background: var(--bg);
   color: var(--white);
   font-family: var(--read);
   overflow: hidden;
   -webkit-user-select: none; user-select: none;
-  -webkit-tap-highlight-color: transparent;
+  -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none;
 }
 * { box-sizing: border-box; touch-action: manipulation; }
 [hidden] { display: none !important; }
@@ -984,6 +984,12 @@ body.padmode .corner[data-corner="settings"] { background: #b6f03c; box-shadow: 
   /* a phone on its side is too short for the upside-down copy, so the card shows one readable half */
   .card { grid-template-rows: minmax(0, 1fr); max-height: none; }
   .card > .half.flip, .card > .fold { display: none; }
+  /* the upside-down "wait" note costs a phone the room the card needs */
+  .host.flipped .wait { display: none; }
+  .host.flipped:not(:has(.btn, .status)) { display: none; }
+  #center { gap: 8px; }
+  .host { gap: 8px; }
+  .host .btn { min-height: 38px; padding: 0 12px; }
   .addx { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); grid-template-rows: none; }
   .add-src h3, .add-prev h3 { display: none; }
   .clip-msg { padding: 6px 10px; font-size: 12px; }
@@ -1391,6 +1397,10 @@ function wake() {
   if (!lock && navigator.wakeLock) navigator.wakeLock.request("screen").then(l => { lock = l; l.addEventListener("release", () => lock = null); }).catch(() => {});
 }
 ["pointerdown", "touchend", "click", "keydown"].forEach(ev => document.addEventListener(ev, wake, { capture: true }));
+// several players slapping the screen at once reads as a pinch on iPhone and iPad, which zooms the whole game;
+// Safari ignores the viewport's no-zoom, so stop the gesture itself
+["gesturestart", "gesturechange", "gestureend"].forEach(ev => document.addEventListener(ev, e => e.preventDefault(), { passive: false }));
+document.addEventListener("touchmove", e => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") lock = null; });
 
 // one note with a quick attack and decay; `at` is an absolute audio time
@@ -4457,8 +4467,10 @@ addEventListener("hashchange", checkLink);
 setTimeout(checkLink, 1900);
 
 // ---------- what's new: pops up once after a new release (bump APP_VERSION and add a note each release) ----------
-const APP_VERSION = 56;
+const APP_VERSION = 57;
 const NEWS = [
+  { v: 57, title: "iPhone", items: [
+    ["📱", "Smoother on iPhone: tapping with several fingers at once no longer zooms the screen, typing in a box doesn't zoom in, and cards have more room on a phone turned sideways."]] },
   { v: 55, title: "Skann QR", items: [
     ["📷", "<b>Skann QR</b> now uses the live camera: point it at the code and the lists pop up by themselves."],
     ["🔳", "Codes hold about a third more words, and a big set plays as a <b>moving code</b>. Keep Skann QR on it until every part is in."]] },
