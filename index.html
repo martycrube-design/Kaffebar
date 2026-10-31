@@ -845,6 +845,16 @@ body.voice-busy .say-bar { visibility: hidden; }
 .qr-sub { font-size: clamp(12px, 1.8vmin, 15px); opacity: .7; text-align: center; max-width: 46ch; }
 .qr-box.anim { position: relative; }
 .qr-step { position: absolute; right: 8px; bottom: 8px; padding: 4px 10px; border-radius: 10px; background: var(--ink); color: #fff; font-family: var(--display); font-weight: 800; font-size: 14px; }
+.mtest { position: fixed; inset: 0; z-index: 95; background: rgba(10,6,24,.8); display: grid; place-items: center; padding: 16px; }
+.mt-card { width: min(440px, 100%); background: #fff; color: #17112e; border-radius: 22px; padding: 22px; display: grid; gap: 12px; text-align: center; }
+.mt-head { font-size: 1.3rem; }
+.mt-msg { margin: 0; font-size: 1.05rem; }
+.mt-bar { height: 16px; border-radius: 99px; background: #eee9f7; overflow: hidden; }
+.mt-bar i { display: block; height: 100%; width: 0; background: #2fbf71; transition: width .08s; }
+.mt-heard { margin: 0; font-size: 1.2rem; font-weight: 700; min-height: 1.4em; }
+.mt-heard span { font-weight: 400; opacity: .6; font-size: .9rem; }
+.mt-diag { opacity: .55; font-size: .75rem; word-break: break-word; }
+.mt-btns { display: flex; gap: 10px; justify-content: center; }
 .scan { position: fixed; inset: 0; z-index: 90; background: #000; display: grid; place-items: center; }
 .scan video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .scan-frame { position: relative; width: min(70vmin, 620px); aspect-ratio: 1; border-radius: 28px; box-shadow: 0 0 0 4px var(--accent), 0 0 0 100vmax rgba(0,0,0,.4); }
@@ -2116,6 +2126,7 @@ const PANELS = {
       <button class="scard${SND.sfx ? " on" : ""}" data-p="sfx">${ICO.bell.replace("<svg", '<svg class="ico"')}<span class="badge state${SND.sfx ? " yes" : ""}">${SND.sfx ? "På" : "Av"}</span><b>Lydeffekter</b><small>Buzzers, dice, ticking fuse and the winner's fanfare.</small></button>
       <button class="scard" data-p="test">${ICO.play.replace("<svg", '<svg class="ico"')}<b>Test lyd</b><small>Plays a short fanfare so you can check the volume.</small></button>
       ${voiceCard()}
+      ${VO.on ? `<button class="scard" data-p="mictest">${MIC_SVG.replace("<svg", '<svg class="ico"')}<b>Test mikrofon</b><small>Say something and see if Kaffebar hears it, and how fast.</small></button>` : ""}
     </div>`,
   }),
   settings: () => {
@@ -2272,6 +2283,7 @@ panelEl.addEventListener("click", e => {
     }
     case "music": case "sfx": toggleSound(a); return renderPanel();
     case "voice": return voiceToggle();
+    case "mictest": return micTest();
     case "test": unlockAudio(); if (SND.music) startMusic(); return sfx.fanfare();
     case "dircycle": { const k = DIRS.findIndex(d => d[0] === S.dir); S.dir = DIRS[(k + 1) % DIRS.length][0]; save(); sfx.flip(); return renderPanel(); }
     case "reset":
@@ -4500,8 +4512,11 @@ addEventListener("hashchange", checkLink);
 setTimeout(checkLink, 1900);
 
 // ---------- what's new: pops up once after a new release (bump APP_VERSION and add a note each release) ----------
-const APP_VERSION = 58;
+const APP_VERSION = 59;
 const NEWS = [
+  { v: 59, title: "Mikrofon", items: [
+    ["🎙️", "Stemme on iPhone: if the mic sends only silence, Kaffebar now restarts it by itself and gives the team another go."],
+    ["✅", "New <b>Test mikrofon</b> button in Lyd (when Stemme is on): say something and see if Kaffebar hears it, and how fast."]] },
   { v: 58, title: "Huskespill", items: [
     ["🃏", "<b>Huskespill</b> works with sentence lists now: it picks short pairs first, and text shrinks to fit the card."],
     ["🔍", "Tap a turned-up card with a long phrase to see it big in the middle of the table."]] },
@@ -4595,6 +4610,80 @@ function voiceCard() {
     : "In Først! tap your bar, then say the answer. Runs on this iPad.";
   return `<button class="scard${VO.on ? " on" : ""}" data-p="voice">${MIC_SVG.replace("<svg", '<svg class="ico"')}<span class="badge state${voiceReady() ? " yes" : ""}">${state}</span><b>Stemme</b><small>${small}</small></button>`;
 }
+// Test mikrofon: records 3 seconds the same way the game does, shows the level live,
+// then what Whisper heard and how long it took. The small print helps find what's wrong.
+async function micTest() {
+  if (S.mode === "buzz" || document.querySelector(".mtest")) return;
+  sfx.pick();
+  const el = document.createElement("div"); el.className = "mtest";
+  el.innerHTML = `<div class="mt-card"><b class="mt-head">Test mikrofon</b><p class="mt-msg">Opening the mic…</p>
+    <div class="mt-bar"><i></i></div><p class="mt-heard"></p><small class="mt-diag"></small>
+    <div class="mt-btns"><button class="btn primary" data-mt="again" hidden>Prøv igjen</button><button class="btn" data-mt="close">Lukk</button></div></div>`;
+  document.body.appendChild(el);
+  const $ = q => el.querySelector(q), msg = $(".mt-msg"), bar = $(".mt-bar i"), heardEl = $(".mt-heard"), diag = $(".mt-diag"), again = $("[data-mt=again]");
+  const t = { stream: null, ctx: null, node: null, src: null, done: false };
+  const stop = () => {
+    if (t.node) { t.node.onaudioprocess = null; try { t.src.disconnect(); t.node.disconnect(); } catch (_) {} }
+    if (t.stream) t.stream.getTracks().forEach(tr => tr.stop());
+    if (t.ctx) { try { t.ctx.close(); } catch (_) {} }
+    t.stream = t.ctx = t.node = t.src = null;
+    try { if (navigator.audioSession && !VO.stream) navigator.audioSession.type = "playback"; } catch (_) {}
+  };
+  $("[data-mt=close]").onclick = () => { sfx.pick(); t.done = true; stop(); el.remove(); };
+  const run = async () => {
+    again.hidden = true; heardEl.textContent = ""; diag.textContent = ""; bar.style.width = "0";
+    // made inside the tap, so iOS lets it start
+    try { t.ctx = new (window.AudioContext || window.webkitAudioContext)(); t.ctx.resume().catch(() => {}); } catch (_) {}
+    try { if (navigator.audioSession) navigator.audioSession.type = "play-and-record"; } catch (_) {}
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw Object.assign(new Error("no getUserMedia"), { name: "NoMic" });
+      t.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+        .catch(err => err.name === "NotAllowedError" || err.name === "SecurityError" ? Promise.reject(err) : navigator.mediaDevices.getUserMedia({ audio: true }));
+    } catch (err) {
+      msg.innerHTML = err.name === "NotAllowedError" ? "Mic blocked. In Safari tap <b>aA → Website Settings → Microphone → Allow</b>, then try again." : `The mic didn't open (${esc(err.name || "error")}).`;
+      diag.textContent = String(err.message || err); again.hidden = false; stop(); return;
+    }
+    if (t.done) return stop();
+    let ctx = t.ctx;
+    // an engine that still won't run gets one more fresh start now that the mic is open
+    if (!ctx || ctx.state !== "running") { try { ctx.close(); } catch (_) {} try { ctx = t.ctx = new (window.AudioContext || window.webkitAudioContext)(); await ctx.resume(); } catch (_) {} }
+    const chunks = [], track = t.stream.getAudioTracks()[0];
+    let peak = 0, frames = 0, t0 = 0;
+    t.src = ctx.createMediaStreamSource(t.stream); t.node = ctx.createScriptProcessor(2048, 1, 1);
+    const mute = ctx.createGain(); mute.gain.value = 0;
+    t.node.onaudioprocess = e => {
+      const d = new Float32Array(e.inputBuffer.getChannelData(0));
+      let m = 0, q = 0; for (let k = 0; k < d.length; k++) { const v = Math.abs(d[k]); if (v > m) m = v; q += d[k] * d[k]; }
+      frames++; peak = Math.max(peak, m); if (t0) chunks.push(d);
+      bar.style.width = Math.min(100, Math.sqrt(q / d.length) * 900) + "%";
+    };
+    t.src.connect(t.node); t.node.connect(mute); mute.connect(ctx.destination);
+    msg.innerHTML = "Say something in Norwegian now, for example <b>«en kopp kaffe»</b>";
+    t0 = Date.now();
+    await new Promise(r => setTimeout(r, 3000));
+    if (t.done) return;
+    const rate = ctx.sampleRate, info = () => `engine ${ctx.state} · ${rate} Hz · mic ${track ? track.readyState + (track.muted ? " (muted)" : "") : "none"} · ${frames} blocks · loudest ${peak.toFixed(3)}`;
+    t.node.onaudioprocess = null; bar.style.width = "0";
+    diag.textContent = info();
+    if (!frames) msg.innerHTML = "No sound reached Kaffebar. Close other apps that use the mic, then try again.";
+    else if (!peak) msg.innerHTML = "The mic is open but sends only silence. Check that no other app or call is using it, then try again.";
+    else if (peak < .02) msg.innerHTML = "The mic works, but it's very quiet. Hold the phone closer.";
+    else msg.innerHTML = "✅ The mic works.";
+    if (frames && peak && voiceReady()) {
+      heardEl.textContent = "Listening back…";
+      try {
+        const s0 = performance.now(), audio = await voiceTo16k(chunks, rate);
+        const words = WORDS.length ? voiceWords(WORDS[0][0], 0) : [];
+        const heard = await voiceHear(audio, "norwegian", words);
+        if (t.done) return;
+        heardEl.innerHTML = heard ? `Hørte «${esc(heard)}» <span>· ${((performance.now() - s0) / 1000).toFixed(1)} s</span>` : "Heard sound, but no words.";
+      } catch (err) { heardEl.textContent = "Couldn't check the words: " + (err.message || err); }
+    } else if (frames && peak) heardEl.textContent = VO.loading ? "The speech model is still downloading." : "";
+    stop(); again.hidden = false;
+  };
+  again.onclick = () => { sfx.pick(); run(); };
+  run();
+}
 function voiceRefresh() { if (P.stack.at(-1) === "audio") renderPanel(); }
 function voiceToggle() {
   VO.on = !VO.on; store("kaffebar-voice", VO.on); sfx.pick(); VO.micErr = "";
@@ -4644,21 +4733,9 @@ function voiceArm() {
       VO.arming = false;
       if (gen !== VO.gen || S.mode !== "buzz") { stream.getTracks().forEach(tr => tr.stop()); return voiceSession(); }
       VO.stream = stream; VO.micErr = "";
-      const ctx = VO.ctx; if (ctx.state !== "running") ctx.resume().catch(() => {});
-      VO.rate = ctx.sampleRate;
-      const src = ctx.createMediaStreamSource(stream), node = ctx.createScriptProcessor(2048, 1, 1), mute = ctx.createGain();
-      mute.gain.value = 0;
-      node.onaudioprocess = e => {
-        const d = new Float32Array(e.inputBuffer.getChannelData(0));
-        let m = 0, q = 0; for (let k = 0; k < d.length; k++) { const v = Math.abs(d[k]); if (v > m) m = v; q += d[k] * d[k]; }
-        const rms = Math.sqrt(q / d.length);
-        // between turns: keep the last ~0.4 s, so a word started on the tap isn't cut off
-        if (VO.stage !== "listen") { VO.pre.push(d); if (VO.pre.length > PRE_CHUNKS) VO.pre.shift(); VO.floor = VO.floor ? VO.floor * .95 + rms * .05 : rms; return; }
-        VO.chunks.push(d); VO.frames++; VO.peak = Math.max(VO.peak, m);
-        voiceLevel(rms, d.length / ctx.sampleRate); voicePeek();
-      };
-      src.connect(node); node.connect(mute); mute.connect(ctx.destination);
-      VO.src = src; VO.node = node; VO.mute = mute;
+      // iOS can cut the mic off (a call, Siri, another app): open it again on the next turn
+      stream.getAudioTracks().forEach(tr => tr.addEventListener("ended", () => { if (VO.stream === stream) { voiceUnwire(); stream.getTracks().forEach(t => t.stop()); VO.stream = null; } }));
+      voiceWire(VO.ctx);
     })
     .catch(err => {
       VO.arming = false; console.warn(err);
@@ -4668,12 +4745,53 @@ function voiceArm() {
       voiceSession(); toast("🎙️ " + esc(VO.micErr));
     });
 }
+// mic → recorder. On iPad the game's own audio engine works best. On iPhone an engine that was
+// started before the mic opened can get nothing but silence, so voiceFix swaps in a fresh one.
+function voiceWire(ctx) {
+  if (ctx.state !== "running") ctx.resume().catch(() => {});
+  VO.ctx = ctx; VO.rate = ctx.sampleRate; VO.wired = Date.now(); VO.lastProc = 0; VO.armMax = 0;
+  const src = ctx.createMediaStreamSource(VO.stream), node = ctx.createScriptProcessor(2048, 1, 1), mute = ctx.createGain();
+  mute.gain.value = 0;
+  node.onaudioprocess = e => {
+    const d = new Float32Array(e.inputBuffer.getChannelData(0));
+    let m = 0, q = 0; for (let k = 0; k < d.length; k++) { const v = Math.abs(d[k]); if (v > m) m = v; q += d[k] * d[k]; }
+    const rms = Math.sqrt(q / d.length);
+    VO.lastProc = Date.now(); if (m > VO.armMax) VO.armMax = m;
+    // between turns: keep the last ~0.4 s, so a word started on the tap isn't cut off
+    if (VO.stage !== "listen") { VO.pre.push(d); if (VO.pre.length > PRE_CHUNKS) VO.pre.shift(); VO.floor = VO.floor ? VO.floor * .95 + rms * .05 : rms; return; }
+    VO.chunks.push(d); VO.frames++; VO.peak = Math.max(VO.peak, m);
+    voiceLevel(rms, d.length / ctx.sampleRate); voicePeek();
+  };
+  src.connect(node); node.connect(mute); mute.connect(ctx.destination);
+  VO.src = src; VO.node = node; VO.mute = mute;
+}
+function voiceUnwire() {
+  if (VO.node) { VO.node.onaudioprocess = null; try { VO.src.disconnect(); VO.node.disconnect(); VO.mute.disconnect(); } catch (_) {} VO.node = VO.src = VO.mute = null; }
+  if (VO.ctx && VO.ctx !== actx) { try { VO.ctx.close(); } catch (_) {} }
+  VO.ctx = actx;
+}
+// no sound blocks arriving, or perfect digital silence: the mic isn't really reaching the game
+function voiceDead() {
+  if (!VO.stream || !VO.node) return false;
+  const now = Date.now(), up = now - VO.wired;
+  return VO.bad || (up > 800 && now - VO.lastProc > 800) || (up > 1500 && VO.armMax === 0);
+}
+// runs inside a tap, where iOS always lets a new audio engine start
+function voiceFix() {
+  if (!voiceDead()) return;
+  const live = VO.stream.getAudioTracks().some(tr => tr.readyState === "live");
+  if (!live) { voiceUnwire(); VO.stream.getTracks().forEach(t => t.stop()); VO.stream = null; VO.bad = false; return voiceArm(); }
+  let ctx; try { ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (_) { return; }
+  console.info("Stemme: mic was silent, using a fresh audio engine");
+  voiceUnwire(); VO.bad = false; VO.pre = []; voiceWire(ctx);
+}
 // back to plain playback, which keeps sound on with the silent switch
 function voiceSession() { try { if (navigator.audioSession && !VO.stream) navigator.audioSession.type = "playback"; } catch (_) {} }
 // the team that buzzed has 5 seconds to tap its blinking mic, then 3 seconds to say it
 function voiceTurn(i) {
   if (!voiceReady()) return false;
   if (!VO.stream) { voiceArm(); return false; }   // not ready yet: this round is judged by hand
+  voiceFix();
   stopTimers(); ++VO.run;
   VO.stage = "arm"; VO.rec = i; VO.armEnd = Date.now() + ARM_MS;
   for (let k = 1; k < ARM_MS / 1000; k++) later(() => tone(880, 0, .05, "square", .06), k * 1000);
@@ -4684,6 +4802,7 @@ function voiceListen(i) {
   if (!voiceReady() || VO.stage !== "arm" || !VO.stream) return false;
   if (S.mode !== "buzz" || B.phase !== "buzzed" || B.buzzed !== i) return false;
   stopTimers(); ++VO.run;
+  voiceFix();
   if (VO.ctx.state !== "running") VO.ctx.resume().catch(() => {});
   const [no, en] = B.deck[B.idx]; VO.col = B.showNo ? 1 : 0; VO.answer = B.showNo ? en : no; VO.lang = B.showNo ? "english" : "norwegian";
   VO.words = voiceWords(VO.answer, VO.col); VO.lastPeek = Date.now(); VO.peekP = null;
@@ -4711,7 +4830,7 @@ function voiceLevel(rms, dur) {
 // leaving Først! or turning Stemme off: release the mic so the iPad's mic light goes out
 function voiceOff() {
   VO.gen++; clearTimeout(VO.safety);
-  if (VO.node) { VO.node.onaudioprocess = null; try { VO.src.disconnect(); VO.node.disconnect(); VO.mute.disconnect(); } catch (_) {} VO.node = VO.src = VO.mute = null; }
+  voiceUnwire(); VO.bad = false;
   if (VO.stream) { VO.stream.getTracks().forEach(tr => tr.stop()); VO.stream = null; }
   VO.pre = []; voiceSession();
 }
@@ -4753,6 +4872,14 @@ async function voiceStop() {
   renderBuzz();
   if (VO.peekP) await VO.peekP;   // one recognition at a time; it may already have found the word
   if (run !== VO.run) return;
+  if (!VO.frames || !VO.peak) {
+    // the mic sent nothing at all: fix it and give the same team another go
+    VO.bad = true; VO.stage = null; VO.rec = null;
+    if (S.mode !== "buzz" || B.phase !== "buzzed" || B.buzzed !== i) return renderPads();
+    if (VO.redo === B.idx) { VO.redo = null; return voiceMiss(i, "Mikrofonen hørte ingenting"); }
+    VO.redo = B.idx; sfx.miss(); toast("🎙️ The mic didn't pick anything up · tap the mic and try again");
+    return voiceTurn(i);
+  }
   let heard = "";
   try {
     const audio = await voiceTo16k(VO.chunks, VO.rate);
