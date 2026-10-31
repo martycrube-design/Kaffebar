@@ -4512,8 +4512,11 @@ addEventListener("hashchange", checkLink);
 setTimeout(checkLink, 1900);
 
 // ---------- what's new: pops up once after a new release (bump APP_VERSION and add a note each release) ----------
-const APP_VERSION = 59;
+const APP_VERSION = 60;
 const NEWS = [
+  { v: 60, title: "Telefon", items: [
+    ["📱", "Stemme on a phone loads a lighter version of the speech model, so the page doesn't run out of memory and close."],
+    ["🛟", "If the page ever closes while the model loads, Kaffebar won't try again by itself. Tap Stemme off and on to retry."]] },
   { v: 59, title: "Mikrofon", items: [
     ["🎙️", "Stemme on iPhone: if the mic sends only silence, Kaffebar now restarts it by itself and gives the team another go."],
     ["✅", "New <b>Test mikrofon</b> button in Lyd (when Stemme is on): say something and see if Kaffebar hears it, and how fast."]] },
@@ -4687,11 +4690,17 @@ async function micTest() {
 function voiceRefresh() { if (P.stack.at(-1) === "audio") renderPanel(); }
 function voiceToggle() {
   VO.on = !VO.on; store("kaffebar-voice", VO.on); sfx.pick(); VO.micErr = "";
-  if (VO.on) voiceLoad(); else voiceClose();
+  if (VO.on) voiceLoad(true); else voiceClose();
   voiceRefresh();
 }
-async function voiceLoad() {
+// Phones have far less memory than an iPad. If loading the model ever kills the page, the next
+// start sees the mark it left and waits for a tap instead of crashing again and again.
+const PHONE = /iPhone|iPod/.test(navigator.userAgent) || (/Android/.test(navigator.userAgent) && /Mobile/.test(navigator.userAgent));
+async function voiceLoad(tapped) {
   if (VO.asr || VO.loading) return;
+  let crashed = false; try { crashed = !!localStorage.getItem("kaffebar-voice-loading"); } catch (_) {}
+  if (crashed && !tapped) { VO.err = "The speech model didn't finish loading last time. Tap Stemme off and on to load it again.";; return voiceRefresh(); }
+  try { localStorage.setItem("kaffebar-voice-loading", String(Date.now())); } catch (_) {}
   VO.loading = true; VO.err = ""; VO.pct = 0; voiceRefresh();
   try {
     const { pipeline } = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1");
@@ -4702,16 +4711,22 @@ async function voiceLoad() {
       let l = 0, n = 0; for (const [a, b] of files.values()) { l += a; n += b; }
       const pct = 100 * l / n; if (pct - VO.pct >= 3 || pct >= 100) { VO.pct = pct; voiceRefresh(); }
     };
-    const tries = [...(navigator.gpu ? [{ device: "webgpu", dtype: { encoder_model: "fp32", decoder_model_merged: "q4" } }] : []), { device: "wasm", dtype: "q8" }];
+    // the full-size graphics-chip version is too big for a phone's memory: phones use the compact one
+    const tries = [...(navigator.gpu && !PHONE ? [{ device: "webgpu", dtype: { encoder_model: "fp32", decoder_model_merged: "q4" } }] : []), { device: "wasm", dtype: "q8" }];
     for (const t of tries) {
+      let asr = null;
       try {
-        const asr = await pipeline("automatic-speech-recognition", VOICE_MODEL, { ...t, progress_callback });
+        asr = await pipeline("automatic-speech-recognition", VOICE_MODEL, { ...t, progress_callback });
         await asr(new Float32Array(16000), { language: "norwegian", task: "transcribe" });
         VO.asr = asr; break;
-      } catch (err) { console.warn("voice model failed on", t.device, err); VO.err = "Couldn't load the speech model"; }
+      } catch (err) {
+        console.warn("voice model failed on", t.device, err); VO.err = "Couldn't load the speech model";
+        try { if (asr && asr.dispose) await asr.dispose(); } catch (_) {}   // free it before trying the next one
+      }
     }
     if (VO.asr) { VO.err = ""; if (VO.on) toast("🎙️ Stemme klar!"); }
   } catch (err) { console.warn(err); VO.err = "No internet to download the speech model"; }
+  try { localStorage.removeItem("kaffebar-voice-loading"); } catch (_) {}
   VO.loading = false; voiceRefresh(); if (S.mode === "buzz") renderBuzz();
 }
 // The mic opens when Først! starts and closes when you leave it. Switching the iPad's audio mode
